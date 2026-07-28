@@ -2,7 +2,7 @@
   "name": "guess-plugin",
   "version": "0.0.1",
   "author": "小佳佳",
-  "description": "一个Yunzai-Bot的猜角色插件，支持头像、全身、命座、天赋等多种猜图模式",
+  "description": "这是一款面向Yunzai-Bot的猜角色类插件，支持头像、全身立绘、命座、天赋等多种不同类型的猜图模式，玩法丰富多样。",
   "type": "module",
   "dependencies": {
     "sharp": "^0.33.5",

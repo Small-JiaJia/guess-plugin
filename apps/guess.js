@@ -1,4 +1,10 @@
-// ./guess-plugin/app/guess.js
+// ============================================================
+// 插件名称：猜角色 (Guess)
+// 功能：通过角色图片局部、命座图标、天赋图标等让群友猜角色
+// 路径：./plugins/guess-plugin/app/guess.js
+// 依赖：roleId.js (角色别名) 和 角色目录下的 data.json
+// ============================================================
+
 import sharp from 'sharp'
 import fs from 'fs'
 import path from 'path'
@@ -7,19 +13,20 @@ import { pathToFileURL } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// 路径常量
-const ROLE_DATA_PATH = path.join(__dirname, '../data/roleId.js')
-const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character')
+// ---------- 路径常量 ----------
+const ROLE_DATA_PATH = path.join(__dirname, '../data/roleId.js')          // 角色别名数据
+const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character') // 角色资源根目录
 
-// 游戏状态存储
-const games = new Map()
-const GAME_TIMEOUT = 5 * 60 * 1000
+// ---------- 游戏状态 ----------
+const games = new Map()            // 存储每个群的游戏状态 (groupId -> game对象)
+const GAME_TIMEOUT = 5 * 60 * 1000 // 游戏超时时间 5分钟
 
-// ---------- 角色数据缓存 ----------
+// ---------- 角色别名缓存 ----------
 let roleNames = null
 let aliasMap = null
 let roleLoading = false
 
+// ---------- 加载角色别名数据 ----------
 async function loadRoleData() {
     if (roleNames && aliasMap) return { roleNames, aliasMap }
     if (roleLoading) {
@@ -58,9 +65,10 @@ async function loadRoleData() {
     return { roleNames, aliasMap }
 }
 
-// ---------- 辅助函数 ----------
+// ---------- 工具函数 ----------
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 
+// Fisher–Yates 洗牌算法，用于打乱提示顺序
 function shuffleArray(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -69,6 +77,7 @@ function shuffleArray(arr) {
     return arr
 }
 
+// ---------- 从 data.json 读取角色信息 ----------
 function readDataJson(name) {
     const jsonPath = path.join(GENSHIN_CHARACTER_DIR, name, 'data.json')
     if (!fs.existsSync(jsonPath)) return null
@@ -80,6 +89,7 @@ function readDataJson(name) {
     }
 }
 
+// 获取角色额外数据（统一从 data.json 读取，并映射中文）
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
@@ -114,7 +124,8 @@ function getExtraData(name) {
     }
 }
 
-// ---------- 图片相关函数 ----------
+// ---------- 图片处理函数 ----------
+// 根据模式获取对应的图片文件名
 function getFileNameByMode(mode) {
     switch (mode) {
         case 'avatar': return 'face.webp'
@@ -131,7 +142,9 @@ function getFileNameByMode(mode) {
     }
 }
 
+// 检查角色是否有对应模式的图片
 function checkImageExists(mode, name) {
+    // 命座/天赋模式检查 icons 目录
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', 'cons-1.webp')
         return fs.existsSync(filePath)
@@ -142,13 +155,16 @@ function checkImageExists(mode, name) {
         const files = fs.readdirSync(dir).filter(f => /^passive-\d+\.webp$/.test(f))
         return files.length > 0
     }
+    // 普通模式检查 imgs 目录
     const fileName = getFileNameByMode(mode)
     const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', fileName)
     return fs.existsSync(filePath)
 }
 
+// 获取图片完整路径（命座/天赋模式下可传入固定路径）
 function getImagePath(mode, name, fixedPath = null) {
     if (fixedPath) return fixedPath
+
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', `cons-${num}.webp`)
@@ -159,13 +175,16 @@ function getImagePath(mode, name, fixedPath = null) {
         if (!fs.existsSync(dir)) return null
         const files = fs.readdirSync(dir).filter(f => /^passive-\d+\.webp$/.test(f))
         if (files.length === 0) return null
-        return path.join(dir, randomItem(files))
+        const randomFile = randomItem(files)
+        return path.join(dir, randomFile)
     }
+
     const fileName = getFileNameByMode(mode)
     const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', fileName)
     return fs.existsSync(filePath) ? filePath : null
 }
 
+// 为命座/天赋模式固定一张图标（防止提示时图片变动）
 function getFixedIconPath(mode, name) {
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
@@ -182,9 +201,12 @@ function getFixedIconPath(mode, name) {
     return null
 }
 
+// ---------- 图像生成核心 ----------
+// 生成裁剪图（普通模式裁剪局部，命座/天赋模式直接返回全图）
 async function generateCrop(game) {
     const { mode, name, iconPath } = game
 
+    // 命座/天赋模式：直接使用固定图标
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard' ||
         mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard') {
         if (!iconPath || !fs.existsSync(iconPath)) {
@@ -194,15 +216,21 @@ async function generateCrop(game) {
         return await image.webp({ quality: 90 }).toBuffer()
     }
 
+    // 普通模式：从 imgs 目录读取并裁剪局部
     const filePath = getImagePath(mode, name)
     if (!filePath) throw new Error(`图片不存在: ${name}`)
+
     let image = sharp(filePath)
     const metadata = await image.metadata()
     const w = metadata.width, h = metadata.height
+
+    // 首次初始化裁剪参数
     if (!game.cropSide) {
         const shortSide = Math.min(w, h)
         let ratio = 0.25
-        if (mode === 'splash') ratio = 0.15
+        if (mode === 'splash') {
+            ratio = 0.15  // 普通模式更小
+        }
         const side = Math.max(50, Math.round(shortSide * ratio))
         const maxX = w - side, maxY = h - side
         game.cropX = Math.round(Math.random() * Math.max(0, maxX))
@@ -211,21 +239,42 @@ async function generateCrop(game) {
         game.imageWidth = w
         game.imageHeight = h
         game.hints = 0
-        game.shownBounds = []
+        game.shownBounds = []   // 记录所有展示过的区域
     }
-    const currentBounds = { left: game.cropX, top: game.cropY, width: game.cropSide, height: game.cropSide }
+
+    // 记录当前裁剪区域到历史
+    const currentBounds = {
+        left: game.cropX,
+        top: game.cropY,
+        width: game.cropSide,
+        height: game.cropSide
+    }
     const exists = game.shownBounds.some(b =>
         b.left === currentBounds.left && b.top === currentBounds.top &&
         b.width === currentBounds.width && b.height === currentBounds.height
     )
-    if (!exists) game.shownBounds.push(currentBounds)
-    let pipeline = image.extract({ left: game.cropX, top: game.cropY, width: game.cropSide, height: game.cropSide })
-        .resize(360, 360, { fit: 'fill' })
-    if (mode === 'hard') pipeline = pipeline.grayscale()
-    else if (mode === 'hell') pipeline = pipeline.negate()
+    if (!exists) {
+        game.shownBounds.push(currentBounds)
+    }
+
+    let pipeline = image.extract({
+        left: game.cropX,
+        top: game.cropY,
+        width: game.cropSide,
+        height: game.cropSide
+    }).resize(360, 360, { fit: 'fill' })
+
+    // 应用滤镜
+    if (mode === 'hard') {
+        pipeline = pipeline.grayscale()
+    } else if (mode === 'hell') {
+        pipeline = pipeline.negate()
+    }
+
     return await pipeline.webp({ quality: 90 }).toBuffer()
 }
 
+// 扩大裁剪区域（用于 #提示 指令）
 function enlargeCrop(game) {
     const { imageWidth, imageHeight, cropX, cropY, cropSide } = game
     const minSide = Math.min(imageWidth, imageHeight)
@@ -240,22 +289,38 @@ function enlargeCrop(game) {
     game.cropY = newY
     game.cropSide = newSide
     game.hints = (game.hints || 0) + 1
-    const newBounds = { left: newX, top: newY, width: newSide, height: newSide }
+
+    const newBounds = {
+        left: newX,
+        top: newY,
+        width: newSide,
+        height: newSide
+    }
     const exists = game.shownBounds.some(b =>
         b.left === newBounds.left && b.top === newBounds.top &&
         b.width === newBounds.width && b.height === newBounds.height
     )
-    if (!exists) game.shownBounds.push(newBounds)
-    return newSide >= minSide
+    if (!exists) {
+        game.shownBounds.push(newBounds)
+    }
+
+    return newSide >= minSide  // 是否已全覆盖
 }
 
+// 生成揭晓合成图：裁剪区域保持原色，其余部分变暗并加红框
 async function renderReveal(game) {
     const filePath = getImagePath(game.mode, game.name)
     if (!filePath) throw new Error('原图不存在')
+
     const image = sharp(filePath)
     const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true })
-    const width = info.width, height = info.height, channels = info.channels
+    const width = info.width
+    const height = info.height
+    const channels = info.channels
+
     const shownBounds = game.shownBounds || []
+
+    // 遍历像素，裁剪区域保持原色，其余变暗
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const idx = (y * width + x) * channels
@@ -274,22 +339,30 @@ async function renderReveal(game) {
             }
         }
     }
+
+    // 为每个展示区域绘制红框
     for (const bounds of shownBounds) {
-        const x1 = bounds.left, y1 = bounds.top, x2 = bounds.left + bounds.width - 1, y2 = bounds.top + bounds.height - 1
+        const x1 = bounds.left
+        const y1 = bounds.top
+        const x2 = bounds.left + bounds.width - 1
+        const y2 = bounds.top + bounds.height - 1
         for (let x = x1; x <= x2; x++) {
-            let idx = (y1 * width + x) * channels
+            const idx = (y1 * width + x) * channels
             data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
-            idx = (y2 * width + x) * channels
-            data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
+            const idx2 = (y2 * width + x) * channels
+            data[idx2] = 255; data[idx2+1] = 0; data[idx2+2] = 0; data[idx2+3] = 255
         }
         for (let y = y1; y <= y2; y++) {
-            let idx = (y * width + x1) * channels
+            const idx = (y * width + x1) * channels
             data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
-            idx = (y * width + x2) * channels
-            data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
+            const idx2 = (y * width + x2) * channels
+            data[idx2] = 255; data[idx2+1] = 0; data[idx2+2] = 0; data[idx2+3] = 255
         }
     }
-    return sharp(data, { raw: { width, height, channels } }).webp({ quality: 90 }).toBuffer()
+
+    return sharp(data, { raw: { width, height, channels } })
+        .webp({ quality: 90 })
+        .toBuffer()
 }
 
 // ---------- 插件主类 ----------
@@ -302,8 +375,11 @@ export class Guess extends plugin {
             priority: 1000,
             rule: [
                 { reg: '^#猜角色帮助$', fnc: 'help' },
+                // 命座猜角色 + 难度
                 { reg: '^#命座猜角色(简单|普通|困难)?$', fnc: 'startConstellation' },
+                // 天赋猜角色 + 难度
                 { reg: '^#天赋猜角色(简单|普通|困难)?$', fnc: 'startTalent' },
+                // 普通猜角色
                 { reg: '^#猜(头像(?:侧脸)?|角色(?:普通|困难|地狱|小名片|名片)?)$', fnc: 'guessCommand' },
                 { reg: '^#提示$', fnc: 'hint' },
                 { reg: '^#看答案$', fnc: 'reveal' },
@@ -317,6 +393,7 @@ export class Guess extends plugin {
         this.loadData()
     }
 
+    // ---------- 初始化加载 ----------
     async loadData() {
         try {
             const { roleNames, aliasMap } = await loadRoleData()
@@ -328,6 +405,7 @@ export class Guess extends plugin {
         }
     }
 
+    // 清理超时游戏
     cleanTimeout(groupId) {
         const game = games.get(groupId)
         if (game && Date.now() - game.startedAt > GAME_TIMEOUT) {
@@ -337,21 +415,9 @@ export class Guess extends plugin {
         return false
     }
 
+    // ---------- 帮助指令 ----------
     async help(e) {
-        // 尝试使用图片渲染的帮助（需要 help.js 文件）
-        try {
-            const { default: Help } = await import('./help.js')
-            const img = await Help.render(e)
-            if (img) {
-                await e.reply(segment.image(img))
-                return true
-            }
-        } catch (err) {
-            // 如果 help.js 不存在或渲染失败，降级为纯文本
-            logger?.debug('[猜角色] 图片帮助不可用，使用纯文本')
-        }
-        // 纯文本帮助（备用）
-        const text = `
+        const helpText = `
 📖 猜角色帮助
 
 【启动游戏】
@@ -373,34 +439,32 @@ export class Guess extends plugin {
   #天赋猜角色困难  - 显示天赋图标，初始无提示
 
 【游戏进行】
-  #提示            - 扩大显示区域 / 揭示更多信息
+  #提示            - 扩大显示区域 / 揭示更多角色信息
   #看答案          - 揭晓答案
   #结束            - 结束当前游戏
 
 【作答方式】
   直接发送角色名或别名即可作答
-
-【提示】
-  游戏超时时间：5分钟
-  每个群同时只能进行一局游戏
         `.trim()
-        await e.reply(text)
+        await e.reply(helpText)
         return true
     }
 
-    // ---------- 命座/天赋猜角色 ----------
+    // ---------- 命座猜角色入口 ----------
     async startConstellation(e) {
         const match = e.msg.match(/^#命座猜角色(简单|普通|困难)?$/)
         const difficulty = match?.[1] || '普通'
         return this.startIconGame(e, 'constellation', difficulty, '命座')
     }
 
+    // ---------- 天赋猜角色入口 ----------
     async startTalent(e) {
         const match = e.msg.match(/^#天赋猜角色(简单|普通|困难)?$/)
         const difficulty = match?.[1] || '普通'
         return this.startIconGame(e, 'talent', difficulty, '天赋')
     }
 
+    // ---------- 图标猜角色通用启动器 ----------
     async startIconGame(e, baseMode, difficulty, modeName) {
         if (!this.loaded) {
             await this.loadData()
@@ -418,6 +482,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 根据难度确定模式名和初始提示数
         let mode, initialHintCount
         switch (difficulty) {
             case '简单':
@@ -428,12 +493,13 @@ export class Guess extends plugin {
                 mode = baseMode + '_hard'
                 initialHintCount = 0
                 break
-            default:
+            default: // 普通
                 mode = baseMode
                 initialHintCount = 1
                 break
         }
 
+        // 筛选有图标的角色
         let availableNames = []
         for (const name of this.roleNames) {
             if (checkImageExists(mode, name)) {
@@ -456,12 +522,14 @@ export class Guess extends plugin {
             return false
         }
 
+        // 固定一张图标
         const iconPath = getFixedIconPath(mode, name)
         if (!iconPath) {
             await e.reply(`未找到 ${name} 的${modeName}图标文件`)
             return false
         }
 
+        // 构建提示池并打乱顺序
         const hintPool = [
             { key: 'star', label: '稀有度', value: extra.star === 5 ? '五星 ★★★★★' : '四星 ★★★★' },
             { key: 'element', label: '元素属性', value: extra.element },
@@ -471,21 +539,28 @@ export class Guess extends plugin {
             { key: 'title', label: '称号', value: extra.title },
             { key: 'birth', label: '生日', value: extra.birth },
         ].filter(h => h.value !== null && h.value !== undefined && h.value !== '')
+
         const shuffledPool = shuffleArray([...hintPool])
-        const initialIndex = Math.min(initialHintCount, shuffledPool.length) - 1
+        const initialIndex = Math.min(initialHintCount, shuffledPool.length) - 1  // 索引从0开始
 
         const game = {
-            mode, name, iconPath, startedAt: Date.now(), groupId, extra,
-            hintIndex: initialIndex, hintPool: shuffledPool, hints: []
+            mode,
+            name,
+            iconPath,
+            startedAt: Date.now(),
+            groupId,
+            extra,
+            hintIndex: initialIndex,     // 当前已揭示到的索引
+            hintPool: shuffledPool,      // 打乱后的提示列表
         }
 
         try {
             const buffer = await generateCrop(game)
-            if (initialHintCount > 0) {
+            if (initialHintCount > 0 && game.hintIndex >= 0) {
                 const msgParts = this.buildHintMessage(game)
                 await e.reply([...msgParts, segment.image(buffer)])
             } else {
-                await e.reply([`【${modeName}猜角色】\n发送 #提示 获取更多信息`, segment.image(buffer)])
+                await e.reply(segment.image(buffer))
             }
             games.set(groupId, game)
             const diffName = difficulty === '普通' ? '' : difficulty
@@ -498,23 +573,26 @@ export class Guess extends plugin {
         return true
     }
 
+    // ---------- 构建提示文本 ----------
     buildHintMessage(game) {
         const revealedCount = Math.min(game.hintIndex + 1, game.hintPool.length)
         const revealedHints = game.hintPool.slice(0, revealedCount)
+
         const modeName = game.mode.startsWith('constellation') ? '命座' : '天赋'
         const msgParts = [`【${modeName}猜角色】\n`]
         for (const h of revealedHints) {
             msgParts.push(`${h.label}：${h.value}\n`)
         }
+
         if (revealedCount < game.hintPool.length) {
-            msgParts.push('\n提示：发送 #提示 获取更多信息')
+            msgParts.push('\n💡 发送 #提示 获取更多信息')
         } else {
-            msgParts.push('\n所有提示已给出，请作答！')
+            msgParts.push('\n📢 所有提示已给出，请作答！')
         }
         return msgParts
     }
 
-    // ---------- 核心指令 ----------
+    // ---------- 提示指令 ----------
     async hint(e) {
         const groupId = e.group_id
         if (!groupId) return false
@@ -528,12 +606,14 @@ export class Guess extends plugin {
             return false
         }
 
+        // 命座/天赋模式：逐步揭示更多提示（图片不变）
         if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
             game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
             if (game.hintIndex >= game.hintPool.length - 1) {
                 await e.reply('所有提示已给出，请作答或发送 #看答案')
                 return true
             }
+
             game.hintIndex++
             const msgParts = this.buildHintMessage(game)
             try {
@@ -546,11 +626,13 @@ export class Guess extends plugin {
             return true
         }
 
+        // 普通模式：扩大裁剪区域
         const minSide = Math.min(game.imageWidth, game.imageHeight)
         if (game.cropSide >= minSide) {
             await this.reveal(e)
             return true
         }
+
         const full = enlargeCrop(game)
         try {
             const buffer = await generateCrop(game)
@@ -563,8 +645,10 @@ export class Guess extends plugin {
         return true
     }
 
+    // ---------- 作答处理 ----------
     async guess(e) {
-        if (e.user_id === e.self_id) return false
+        if (e.user_id === e.self_id) return false  // 忽略机器人自己的消息
+
         const groupId = e.group_id
         if (!groupId) return false
         if (this.cleanTimeout(groupId)) {
@@ -573,17 +657,24 @@ export class Guess extends plugin {
         }
         const game = games.get(groupId)
         if (!game) return false
+
         if (!e.msg || typeof e.msg !== 'string') return false
+
         const input = e.msg.trim()
-        if (input.startsWith('#')) return false
+        if (input.startsWith('#')) return false  // 避免干扰其他指令
+
         const knownName = this.aliasMap[input]
-        if (!knownName) return false
+        if (!knownName) return false  // 未知名称不处理
+
         const isCorrect = (input === game.name) || (knownName === game.name)
+
         if (isCorrect) {
+            // 命座/天赋模式：简洁恭喜
             if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
                 game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
                 await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
             } else {
+                // 普通模式：显示揭晓图
                 try {
                     const revealBuffer = await renderReveal(game)
                     await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`, segment.image(revealBuffer)])
@@ -600,27 +691,45 @@ export class Guess extends plugin {
         }
     }
 
+    // ---------- 普通猜角色指令解析 ----------
     async guessCommand(e) {
         const match = e.msg.match(/^#猜(头像(?:侧脸)?|角色(?:普通|困难|地狱|小名片|名片)?)$/)
         if (!match) return false
         const fullMatch = match[1]
         let mode = ''
-        if (fullMatch === '头像') mode = 'avatar'
-        else if (fullMatch === '头像侧脸') mode = 'avatar_side'
-        else if (fullMatch.startsWith('角色')) {
+
+        if (fullMatch === '头像') {
+            mode = 'avatar'
+        } else if (fullMatch === '头像侧脸') {
+            mode = 'avatar_side'
+        } else if (fullMatch.startsWith('角色')) {
             const suffix = fullMatch.replace('角色', '')
             switch (suffix) {
-                case '普通': mode = 'splash'; break
-                case '困难': mode = 'hard'; break
-                case '地狱': mode = 'hell'; break
-                case '小名片': mode = 'banner'; break
-                case '名片': mode = 'card'; break
-                default: mode = 'gacha'
+                case '普通':
+                    mode = 'splash'
+                    break
+                case '困难':
+                    mode = 'hard'
+                    break
+                case '地狱':
+                    mode = 'hell'
+                    break
+                case '小名片':
+                    mode = 'banner'
+                    break
+                case '名片':
+                    mode = 'card'
+                    break
+                default:
+                    mode = 'gacha'
             }
-        } else return false
+        } else {
+            return false
+        }
         return this.startGame(e, mode)
     }
 
+    // ---------- 普通猜角色启动 ----------
     async startGame(e, mode) {
         if (!this.loaded) {
             await this.loadData()
@@ -631,12 +740,15 @@ export class Guess extends plugin {
         }
         const groupId = e.group_id
         if (!groupId) return false
+
         this.cleanTimeout(groupId)
         if (games.has(groupId)) {
             await e.reply('当前群已有游戏，请先结束或等待超时')
             return false
         }
-        let name = null, attempts = 0
+
+        let name = null
+        let attempts = 0
         while (attempts < 30) {
             const candidate = randomItem(this.roleNames)
             if (checkImageExists(mode, candidate)) {
@@ -649,6 +761,7 @@ export class Guess extends plugin {
             await e.reply(`未找到可用的角色图片 (模式: ${mode})`)
             return false
         }
+
         const game = { mode, name, startedAt: Date.now(), groupId }
         try {
             const buffer = await generateCrop(game)
@@ -663,6 +776,7 @@ export class Guess extends plugin {
         return true
     }
 
+    // ---------- 看答案 ----------
     async reveal(e) {
         const groupId = e.group_id
         if (!groupId) return false
@@ -675,12 +789,16 @@ export class Guess extends plugin {
             await e.reply('当前没有进行中的游戏')
             return false
         }
+
+        // 命座/天赋模式：只显示答案
         if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
             game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
             await e.reply(`答案是：${game.name}`)
             games.delete(groupId)
             return true
         }
+
+        // 普通模式：显示揭晓图
         try {
             const revealBuffer = await renderReveal(game)
             await e.reply([`答案是：${game.name}`, segment.image(revealBuffer)])
@@ -692,6 +810,7 @@ export class Guess extends plugin {
         return true
     }
 
+    // ---------- 结束游戏 ----------
     async endGame(e) {
         const groupId = e.group_id
         if (!groupId) return false
