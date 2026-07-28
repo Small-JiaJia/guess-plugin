@@ -8,7 +8,8 @@
 
 // 使用github
 ```
-git clone  --depth=1 https://github.com/Small-JiaJia/guess-plugin.git plugins/guess-plugin
+git clone --depth=1 https://github.com/Small-JiaJia/guess-plugin.git plugins/guess-plugin
+pnpm install -P
 ```
 
 ## 功能说明
