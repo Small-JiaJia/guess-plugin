@@ -1,6 +1,6 @@
 // ============================================================
 // 插件名称：猜角色 (Guess)
-// 功能：通过角色图片局部、命座图标、天赋图标等让群友猜角色
+// 功能：通过角色图片局部、命座图标、天赋图标、特色料理等让群友猜角色
 // 路径：./plugins/guess-plugin/app/guess.js
 // 依赖：roleId.js (角色别名) 和 角色目录下的 data.json 和 roleinformation.js (角色信息)
 // ============================================================
@@ -93,6 +93,7 @@ function readDataJson(name) {
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
+    const roleInfo = REGION_MAP[name] || {}
 
     const weaponMap = {
         'sword': '单手剑',
@@ -117,7 +118,8 @@ function getExtraData(name) {
         rarity: json.star || 5,
         weapon: weaponMap[json.weapon] || json.weapon || '未知',
         allegiance: json.allegiance || '未知',
-        region: REGION_MAP[name] || '未知',
+        region: roleInfo.region || '未知',
+        specialDish: roleInfo.specialDish || null,
         element: elementMap[json.elem] || json.elem || '未知',
         title: json.title || null,
         astro: json.astro || null,
@@ -143,6 +145,12 @@ function getFileNameByMode(mode) {
 }
 
 function checkImageExists(mode, name) {
+    // 料理模式：检查 food.webp
+    if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
+        const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
+        return fs.existsSync(filePath)
+    }
+    // 命座/天赋模式
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', 'cons-1.webp')
         return fs.existsSync(filePath)
@@ -153,6 +161,7 @@ function checkImageExists(mode, name) {
         const files = fs.readdirSync(dir).filter(f => /^passive-\d+\.webp$/.test(f))
         return files.length > 0
     }
+    // 普通模式
     const fileName = getFileNameByMode(mode)
     const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', fileName)
     return fs.existsSync(filePath)
@@ -160,6 +169,12 @@ function checkImageExists(mode, name) {
 
 function getImagePath(mode, name, fixedPath = null) {
     if (fixedPath) return fixedPath
+
+    // 料理模式：返回 food.webp 路径
+    if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
+        const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
+        return fs.existsSync(filePath) ? filePath : null
+    }
 
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
@@ -180,7 +195,13 @@ function getImagePath(mode, name, fixedPath = null) {
     return fs.existsSync(filePath) ? filePath : null
 }
 
+// 获取固定图标路径（用于命座/天赋模式）
 function getFixedIconPath(mode, name) {
+    if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
+        // 料理模式直接返回 food.webp（固定）
+        const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
+        return fs.existsSync(p) ? p : null
+    }
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
         const p = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', `cons-${num}.webp`)
@@ -200,15 +221,18 @@ function getFixedIconPath(mode, name) {
 async function generateCrop(game) {
     const { mode, name, iconPath } = game
 
+    // 命座/天赋/料理模式：直接使用固定图片（不裁剪）
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard' ||
-        mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard') {
+        mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard' ||
+        mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
         if (!iconPath || !fs.existsSync(iconPath)) {
-            throw new Error(`${mode.startsWith('constellation') ? '命座' : '天赋'}图标不存在: ${name}`)
+            throw new Error(`图片不存在: ${name}`)
         }
         const image = sharp(iconPath)
         return await image.webp({ quality: 90 }).toBuffer()
     }
 
+    // 普通模式：裁剪
     const filePath = getImagePath(mode, name)
     if (!filePath) throw new Error(`图片不存在: ${name}`)
 
@@ -355,13 +379,18 @@ export class Guess extends plugin {
     constructor() {
         super({
             name: '猜角色',
-            dsc: '猜原神角色 (头像/侧脸/全身/名片/命座/天赋等)',
+            dsc: '猜原神角色 (头像/侧脸/全身/名片/命座/天赋/料理)',
             event: 'message',
             priority: 1000,
             rule: [
                 { reg: '^#猜角色帮助$', fnc: 'help' },
+                // 命座猜角色
                 { reg: '^#命座猜角色(简单|普通|困难)?$', fnc: 'startConstellation' },
+                // 天赋猜角色
                 { reg: '^#天赋猜角色(简单|普通|困难)?$', fnc: 'startTalent' },
+                // 料理猜角色
+                { reg: '^#料理猜角色(简单|普通|困难)?$', fnc: 'startFood' },
+                // 普通猜角色
                 { reg: '^#猜(头像(?:侧脸)?|角色(?:普通|困难|地狱|小名片|名片)?)$', fnc: 'guessCommand' },
                 { reg: '^#提示$', fnc: 'hint' },
                 { reg: '^#看答案$', fnc: 'reveal' },
@@ -419,6 +448,10 @@ export class Guess extends plugin {
   #天赋猜角色简单  - 显示天赋图标，初始2条提示
   #天赋猜角色困难  - 显示天赋图标，初始无提示
 
+  #料理猜角色      - 显示特色料理，初始1条提示
+  #料理猜角色简单  - 显示特色料理，初始2条提示
+  #料理猜角色困难  - 显示特色料理，初始无提示
+
 【游戏进行】
   #提示            - 扩大显示区域 / 揭示更多角色信息
   #看答案          - 揭晓答案
@@ -445,6 +478,13 @@ export class Guess extends plugin {
         return this.startIconGame(e, 'talent', difficulty, '天赋')
     }
 
+    // ---------- 料理猜角色入口 ----------
+    async startFood(e) {
+        const match = e.msg.match(/^#料理猜角色(简单|普通|困难)?$/)
+        const difficulty = match?.[1] || '普通'
+        return this.startIconGame(e, 'food', difficulty, '料理')
+    }
+
     // ---------- 图标猜角色通用启动器 ----------
     async startIconGame(e, baseMode, difficulty, modeName) {
         if (!this.loaded) {
@@ -463,6 +503,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 确定模式和初始提示数
         let mode, initialHintCount
         switch (difficulty) {
             case '简单':
@@ -479,8 +520,14 @@ export class Guess extends plugin {
                 break
         }
 
+        // 筛选可用角色
         let availableNames = []
         for (const name of this.roleNames) {
+            // 如果是料理模式，需要检查是否有 specialDish
+            if (baseMode === 'food') {
+                const info = REGION_MAP[name]
+                if (!info || !info.specialDish) continue
+            }
             if (checkImageExists(mode, name)) {
                 availableNames.push(name)
             }
@@ -496,14 +543,17 @@ export class Guess extends plugin {
             await e.reply(`角色 ${name} 的 data.json 不存在，无法开始游戏`)
             return false
         }
-        if (!extra.element || !extra.astro) {
-            await e.reply(`角色 ${name} 的 data.json 缺少 elem 或 astro 字段，无法开始游戏`)
+
+        // 料理模式需要确保有 specialDish
+        if (baseMode === 'food' && !extra.specialDish) {
+            await e.reply(`角色 ${name} 缺少特色料理数据，无法开始游戏`)
             return false
         }
 
+        // 固定图片路径
         const iconPath = getFixedIconPath(mode, name)
         if (!iconPath) {
-            await e.reply(`未找到 ${name} 的${modeName}图标文件`)
+            await e.reply(`未找到 ${name} 的${modeName}图片文件`)
             return false
         }
 
@@ -531,6 +581,7 @@ export class Guess extends plugin {
             extra,
             hintIndex: initialIndex,
             hintPool: shuffledPool,
+            isIconMode: true, // 标记为图标模式（命座/天赋/料理）
         }
 
         try {
@@ -557,7 +608,13 @@ export class Guess extends plugin {
         const revealedCount = Math.min(game.hintIndex + 1, game.hintPool.length)
         const revealedHints = game.hintPool.slice(0, revealedCount)
 
-        const modeName = game.mode.startsWith('constellation') ? '命座' : '天赋'
+        // 判断模式名称
+        let modeName = ''
+        if (game.mode.startsWith('constellation')) modeName = '命座'
+        else if (game.mode.startsWith('talent')) modeName = '天赋'
+        else if (game.mode.startsWith('food')) modeName = '料理'
+        else modeName = '猜角色'
+
         const msgParts = [`【${modeName}猜角色】\n`]
         for (const h of revealedHints) {
             msgParts.push(`${h.label}：${h.value}\n`)
@@ -585,8 +642,8 @@ export class Guess extends plugin {
             return false
         }
 
-        if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
-            game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
+        // 图标模式（命座/天赋/料理）：逐步揭示提示
+        if (game.isIconMode) {
             if (game.hintIndex >= game.hintPool.length - 1) {
                 await e.reply('所有提示已给出，请作答或发送 #看答案')
                 return true
@@ -604,6 +661,7 @@ export class Guess extends plugin {
             return true
         }
 
+        // 普通模式：扩大裁剪区域
         const minSide = Math.min(game.imageWidth, game.imageHeight)
         if (game.cropSide >= minSide) {
             await this.reveal(e)
@@ -646,8 +704,8 @@ export class Guess extends plugin {
         const isCorrect = (input === game.name) || (knownName === game.name)
 
         if (isCorrect) {
-            if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
-                game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
+            // 图标模式：只回复恭喜
+            if (game.isIconMode) {
                 await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
             } else {
                 try {
@@ -765,8 +823,8 @@ export class Guess extends plugin {
             return false
         }
 
-        if (game.mode === 'constellation' || game.mode === 'constellation_simple' || game.mode === 'constellation_hard' ||
-            game.mode === 'talent' || game.mode === 'talent_simple' || game.mode === 'talent_hard') {
+        // 图标模式：只显示答案
+        if (game.isIconMode) {
             await e.reply(`答案是：${game.name}`)
             games.delete(groupId)
             return true
