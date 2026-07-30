@@ -89,7 +89,6 @@ function readDataJson(name) {
     }
 }
 
-// 获取角色额外数据（统一从 data.json 读取，并映射中文）
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
@@ -145,12 +144,10 @@ function getFileNameByMode(mode) {
 }
 
 function checkImageExists(mode, name) {
-    // 料理模式：检查 food.webp
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
         return fs.existsSync(filePath)
     }
-    // 命座/天赋模式
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', 'cons-1.webp')
         return fs.existsSync(filePath)
@@ -161,7 +158,6 @@ function checkImageExists(mode, name) {
         const files = fs.readdirSync(dir).filter(f => /^passive-\d+\.webp$/.test(f))
         return files.length > 0
     }
-    // 普通模式
     const fileName = getFileNameByMode(mode)
     const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', fileName)
     return fs.existsSync(filePath)
@@ -170,12 +166,10 @@ function checkImageExists(mode, name) {
 function getImagePath(mode, name, fixedPath = null) {
     if (fixedPath) return fixedPath
 
-    // 料理模式：返回 food.webp 路径
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
         return fs.existsSync(filePath) ? filePath : null
     }
-
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', `cons-${num}.webp`)
@@ -195,10 +189,8 @@ function getImagePath(mode, name, fixedPath = null) {
     return fs.existsSync(filePath) ? filePath : null
 }
 
-// 获取固定图标路径（用于命座/天赋模式）
 function getFixedIconPath(mode, name) {
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
-        // 料理模式直接返回 food.webp（固定）
         const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
         return fs.existsSync(p) ? p : null
     }
@@ -244,12 +236,186 @@ async function generateCrop(game) {
         const shortSide = Math.min(w, h)
         let ratio = 0.25
         if (mode === 'splash') {
-            ratio = 0.15
+            ratio = 0.09
         }
         const side = Math.max(50, Math.round(shortSide * ratio))
-        const maxX = w - side, maxY = h - side
-        game.cropX = Math.round(Math.random() * Math.max(0, maxX))
-        game.cropY = Math.round(Math.random() * Math.max(0, maxY))
+
+        // ★ splash 模式：纹理 30% + 方差 25% + 中心 25% + 色相多样度 2.5% + 亮度对比度 2.5% - 边缘惩罚 15%
+        if (mode === 'splash') {
+            const candidates = []
+            for (let i = 0; i < 30; i++) {
+                const maxX = w - side
+                const maxY = h - side
+                const x = Math.round(Math.random() * Math.max(0, maxX))
+                const y = Math.round(Math.random() * Math.max(0, maxY))
+                candidates.push({ x, y })
+            }
+
+            const { data, info } = await image.clone().raw().toBuffer({ resolveWithObject: true })
+            const channels = info.channels
+
+            let bestScore = -Infinity
+            let bestPos = { x: 0, y: 0 }
+
+            const centerX = w / 2
+            const centerY = h / 2
+            const maxDist = Math.sqrt(centerX * centerX + centerY * centerY)
+            const edgeThreshold = side * 1.5
+
+            const scores = []
+            let varianceScores = []
+
+            for (const cand of candidates) {
+                const cx = cand.x, cy = cand.y
+
+                // ---- 颜色方差、纹理、色相多样度、亮度对比度（跳过透明像素） ----
+                let sumR = 0, sumG = 0, sumB = 0, count = 0
+                const luminances = []
+                const hueSet = new Set()
+                let lumMin = Infinity, lumMax = -Infinity
+
+                for (let dy = 0; dy < side; dy++) {
+                    for (let dx = 0; dx < side; dx++) {
+                        const px = cx + dx, py = cy + dy
+                        if (px >= w || py >= h) continue
+                        const idx = (py * w + px) * channels
+
+                        // ★ 跳过透明/半透明像素
+                        const alpha = data[idx + 3]
+                        if (alpha < 128) continue
+
+                        const r = data[idx] / 255
+                        const g = data[idx + 1] / 255
+                        const b = data[idx + 2] / 255
+                        const lum = r * 0.299 + g * 0.587 + b * 0.114
+
+                        sumR += data[idx]
+                        sumG += data[idx + 1]
+                        sumB += data[idx + 2]
+                        count++
+
+                        luminances.push(lum)
+
+                        if (lum < lumMin) lumMin = lum
+                        if (lum > lumMax) lumMax = lum
+
+                        // 色相多样度
+                        const max = Math.max(r, g, b)
+                        const min = Math.min(r, g, b)
+                        if (max !== min) {
+                            let hue = 0
+                            if (max === r) hue = ((g - b) / (max - min)) % 6
+                            else if (max === g) hue = 2 + (b - r) / (max - min)
+                            else hue = 4 + (r - g) / (max - min)
+                            const hueBin = Math.floor(((hue + 6) % 6) / 0.5)
+                            hueSet.add(hueBin)
+                        }
+                    }
+                }
+
+                // 如果有效像素太少（< 区域的 30%），直接淘汰
+                if (count < side * side * 0.3) continue
+
+                // ---- 颜色方差 ----
+                const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count
+                let varR = 0, varG = 0, varB = 0
+                for (let dy = 0; dy < side; dy++) {
+                    for (let dx = 0; dx < side; dx++) {
+                        const px = cx + dx, py = cy + dy
+                        if (px >= w || py >= h) continue
+                        const idx = (py * w + px) * channels
+                        const alpha = data[idx + 3]
+                        if (alpha < 128) continue
+                        const dr = data[idx] - avgR
+                        const dg = data[idx + 1] - avgG
+                        const db = data[idx + 2] - avgB
+                        varR += dr * dr
+                        varG += dg * dg
+                        varB += db * db
+                    }
+                }
+                const varianceScore = varR + varG + varB
+                varianceScores.push(varianceScore)
+
+                // ---- 纹理（亮度标准差） ----
+                const meanLum = luminances.reduce((a, b) => a + b, 0) / luminances.length
+                let varLum = 0
+                for (const lum of luminances) {
+                    varLum += (lum - meanLum) ** 2
+                }
+                const textureScore = Math.sqrt(varLum / luminances.length) / 255
+
+                // ---- 中心贴近度 ----
+                const regionCenterX = cx + side / 2
+                const regionCenterY = cy + side / 2
+                const distToCenter = Math.sqrt(
+                    Math.pow(regionCenterX - centerX, 2) +
+                    Math.pow(regionCenterY - centerY, 2)
+                )
+                const centerScore = 1 - (distToCenter / maxDist)
+
+                // ---- 色相多样度 ----
+                const hueDiversity = Math.min(hueSet.size / 12, 1.0)
+
+                // ---- 亮度对比度 ----
+                const contrastScore = Math.min((lumMax - lumMin), 1.0)
+
+                // ---- 边缘惩罚（跳过底部） ----
+                const distToLeft = regionCenterX
+                const distToRight = w - regionCenterX
+                const distToTop = regionCenterY
+                const minDistToEdge = Math.min(distToLeft, distToRight, distToTop)
+                let edgePenalty = 0
+                if (minDistToEdge < edgeThreshold) {
+                    edgePenalty = 1 - (minDistToEdge / edgeThreshold)
+                }
+
+                scores.push({
+                    cand,
+                    varianceScore,
+                    textureScore,
+                    centerScore,
+                    hueDiversity,
+                    contrastScore,
+                    edgePenalty
+                })
+            }
+
+            // 归一化方差
+            if (varianceScores.length === 0) {
+                // 没有有效候选，用纯随机
+                const maxX = w - side, maxY = h - side
+                game.cropX = Math.round(Math.random() * Math.max(0, maxX))
+                game.cropY = Math.round(Math.random() * Math.max(0, maxY))
+            } else {
+                const maxVariance = Math.max(...varianceScores)
+                const minVariance = Math.min(...varianceScores)
+                const varianceRange = maxVariance - minVariance || 1
+
+                for (const item of scores) {
+                    const normVariance = (item.varianceScore - minVariance) / varianceRange
+                    const combinedScore =
+                        item.textureScore * 0.30 +
+                        normVariance * 0.25 +
+                        item.centerScore * 0.25 +
+                        item.hueDiversity * 0.025 +
+                        item.contrastScore * 0.025 -
+                        item.edgePenalty * 0.15
+                    if (combinedScore > bestScore) {
+                        bestScore = combinedScore
+                        bestPos = { x: item.cand.x, y: item.cand.y }
+                    }
+                }
+                game.cropX = bestPos.x
+                game.cropY = bestPos.y
+            }
+        } else {
+            // 其他模式：纯随机
+            const maxX = w - side, maxY = h - side
+            game.cropX = Math.round(Math.random() * Math.max(0, maxX))
+            game.cropY = Math.round(Math.random() * Math.max(0, maxY))
+        }
+
         game.cropSide = side
         game.imageWidth = w
         game.imageHeight = h
@@ -384,14 +550,11 @@ export class Guess extends plugin {
             priority: 1000,
             rule: [
                 { reg: '^#猜角色帮助$', fnc: 'help' },
-                // 命座猜角色
                 { reg: '^#命座猜角色(简单|普通|困难)?$', fnc: 'startConstellation' },
-                // 天赋猜角色
                 { reg: '^#天赋猜角色(简单|普通|困难)?$', fnc: 'startTalent' },
-                // 料理猜角色
                 { reg: '^#料理猜角色(简单|普通|困难)?$', fnc: 'startFood' },
-                // 普通猜角色
-                { reg: '^#猜(头像(?:侧脸)?|角色(?:普通|困难|地狱|小名片|名片)?)$', fnc: 'guessCommand' },
+                // ★ 指令统一：头像、头像侧脸、角色、立绘、困难、地狱、小名片、名片
+                { reg: '^#猜(头像(?:侧脸)?|角色(?:困难|地狱|小名片|名片)?|立绘)$', fnc: 'guessCommand' },
                 { reg: '^#提示$', fnc: 'hint' },
                 { reg: '^#看答案$', fnc: 'reveal' },
                 { reg: '^#结束(猜)?(角色|头像)?$', fnc: 'endGame' },
@@ -404,7 +567,6 @@ export class Guess extends plugin {
         this.loadData()
     }
 
-    // ---------- 初始化加载 ----------
     async loadData() {
         try {
             const { roleNames, aliasMap } = await loadRoleData()
@@ -425,7 +587,6 @@ export class Guess extends plugin {
         return false
     }
 
-    // ---------- 帮助指令 ----------
     async help(e) {
         const helpText = `
 猜角色帮助
@@ -433,12 +594,12 @@ export class Guess extends plugin {
 【启动游戏】
   #猜头像          - 仅显示角色头像局部
   #猜头像侧脸      - 仅显示角色侧脸头像局部
-  #猜角色          - 显示全身图局部（无滤镜）
-  #猜角色普通      - 显示全身图局部（无滤镜）
+  #猜角色          - 显示抽卡立绘图局部（无滤镜）
+  #猜立绘          - 显示全身立绘图局部（无滤镜）
+  #猜角色困难      - 黑白效果 + 抽卡立绘局部
+  #猜角色地狱      - 反色效果 + 抽卡立绘局部
   #猜角色小名片    - 显示小名片局部
   #猜角色名片      - 显示名片局部
-  #猜角色困难      - 黑白效果 + 局部
-  #猜角色地狱      - 反色效果 + 局部
 
   #命座猜角色      - 显示命座图标，初始1条提示
   #命座猜角色简单  - 显示命座图标，初始2条提示
@@ -464,21 +625,19 @@ export class Guess extends plugin {
         return true
     }
 
-    // ---------- 命座猜角色入口 ----------
+    // ---------- 入口方法 ----------
     async startConstellation(e) {
         const match = e.msg.match(/^#命座猜角色(简单|普通|困难)?$/)
         const difficulty = match?.[1] || '普通'
         return this.startIconGame(e, 'constellation', difficulty, '命座')
     }
 
-    // ---------- 天赋猜角色入口 ----------
     async startTalent(e) {
         const match = e.msg.match(/^#天赋猜角色(简单|普通|困难)?$/)
         const difficulty = match?.[1] || '普通'
         return this.startIconGame(e, 'talent', difficulty, '天赋')
     }
 
-    // ---------- 料理猜角色入口 ----------
     async startFood(e) {
         const match = e.msg.match(/^#料理猜角色(简单|普通|困难)?$/)
         const difficulty = match?.[1] || '普通'
@@ -503,7 +662,6 @@ export class Guess extends plugin {
             return false
         }
 
-        // 确定模式和初始提示数
         let mode, initialHintCount
         switch (difficulty) {
             case '简单':
@@ -520,10 +678,8 @@ export class Guess extends plugin {
                 break
         }
 
-        // 筛选可用角色
         let availableNames = []
         for (const name of this.roleNames) {
-            // 如果是料理模式，需要检查是否有 specialDish
             if (baseMode === 'food') {
                 const info = REGION_MAP[name]
                 if (!info || !info.specialDish) continue
@@ -544,20 +700,17 @@ export class Guess extends plugin {
             return false
         }
 
-        // 料理模式需要确保有 specialDish
         if (baseMode === 'food' && !extra.specialDish) {
             await e.reply(`角色 ${name} 缺少特色料理数据，无法开始游戏`)
             return false
         }
 
-        // 固定图片路径
         const iconPath = getFixedIconPath(mode, name)
         if (!iconPath) {
             await e.reply(`未找到 ${name} 的${modeName}图片文件`)
             return false
         }
 
-        // 构建提示池（打乱顺序）
         const hintPool = [
             { key: 'star', label: '稀有度', value: extra.star === 5 ? '五星 ★★★★★' : '四星 ★★★★' },
             { key: 'element', label: '元素属性', value: extra.element },
@@ -581,7 +734,7 @@ export class Guess extends plugin {
             extra,
             hintIndex: initialIndex,
             hintPool: shuffledPool,
-            isIconMode: true, // 标记为图标模式（命座/天赋/料理）
+            isIconMode: true,
         }
 
         try {
@@ -603,12 +756,10 @@ export class Guess extends plugin {
         return true
     }
 
-    // ---------- 构建提示文本 ----------
     buildHintMessage(game) {
         const revealedCount = Math.min(game.hintIndex + 1, game.hintPool.length)
         const revealedHints = game.hintPool.slice(0, revealedCount)
 
-        // 判断模式名称
         let modeName = ''
         if (game.mode.startsWith('constellation')) modeName = '命座'
         else if (game.mode.startsWith('talent')) modeName = '天赋'
@@ -642,13 +793,11 @@ export class Guess extends plugin {
             return false
         }
 
-        // 图标模式（命座/天赋/料理）：逐步揭示提示
         if (game.isIconMode) {
             if (game.hintIndex >= game.hintPool.length - 1) {
                 await e.reply('所有提示已给出，请作答或发送 #看答案')
                 return true
             }
-
             game.hintIndex++
             const msgParts = this.buildHintMessage(game)
             try {
@@ -704,7 +853,6 @@ export class Guess extends plugin {
         const isCorrect = (input === game.name) || (knownName === game.name)
 
         if (isCorrect) {
-            // 图标模式：只回复恭喜
             if (game.isIconMode) {
                 await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
             } else {
@@ -726,7 +874,7 @@ export class Guess extends plugin {
 
     // ---------- 普通猜角色指令解析 ----------
     async guessCommand(e) {
-        const match = e.msg.match(/^#猜(头像(?:侧脸)?|角色(?:普通|困难|地狱|小名片|名片)?)$/)
+        const match = e.msg.match(/^#猜(头像(?:侧脸)?|角色(?:困难|地狱|小名片|名片)?|立绘)$/)
         if (!match) return false
         const fullMatch = match[1]
         let mode = ''
@@ -735,12 +883,11 @@ export class Guess extends plugin {
             mode = 'avatar'
         } else if (fullMatch === '头像侧脸') {
             mode = 'avatar_side'
+        } else if (fullMatch === '立绘') {
+            mode = 'splash'
         } else if (fullMatch.startsWith('角色')) {
             const suffix = fullMatch.replace('角色', '')
             switch (suffix) {
-                case '普通':
-                    mode = 'splash'
-                    break
                 case '困难':
                     mode = 'hard'
                     break
@@ -823,7 +970,6 @@ export class Guess extends plugin {
             return false
         }
 
-        // 图标模式：只显示答案
         if (game.isIconMode) {
             await e.reply(`答案是：${game.name}`)
             games.delete(groupId)
