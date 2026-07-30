@@ -13,10 +13,10 @@ git clone --depth=1 https://github.com/Small-JiaJia/guess-plugin.git plugins/gue
 pnpm install -P
 ```
 
-### 功能说明
+### 功能一览列表
 
-|指令|功能|
 【启动游戏】
+|指令|说明|
 |-----|-----|
 |#猜角色帮助|展示指令列表|
 |#猜头像|仅显示角色头像局部|
@@ -56,15 +56,11 @@ pnpm install -P
 没有内置更新功能，更新请手动拉取本项目
 
 ### 致谢
-
-constant.js和index.js代码 来自[TianRu-plugin](https://gitee.com/HDTianRu/TianRu-plugin)  
-genshin文件夹部分资源 来自[miao-plugin](https://github.com/yoimiya-kokomi/miao-plugin) 
+constant.js和index.js代码 来自[TianRu-plugin](https://gitee.com/HDTianRu/TianRu-plugin)
+genshin文件夹部分资源 来自[miao-plugin](https://github.com/yoimiya-kokomi/miao-plugin)
 特殊料理资源 来自[Bwiki](https://wiki.biligame.com/ys/%E9%A3%9F%E7%89%A9%E4%B8%80%E8%A7%88)
 
 ### Ciallo～(∠・ω< )⌒☆
-
 * 如果你觉得本插件还行，不妨请留下一个免费的star吧，你的支持是我们前进的最大动力
-
 * 有新的想法可以在issue中提出来改进这个插件
-
 * 严禁用于任何商业用途和非法行为
