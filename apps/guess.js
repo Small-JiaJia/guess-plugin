@@ -2,7 +2,7 @@
 // 插件名称：猜角色 (Guess)
 // 功能：通过角色图片局部、命座图标、天赋图标、特色料理等让群友猜角色
 // 路径：./plugins/guess-plugin/app/guess.js
-// 依赖：roleId.js (角色别名) 和 角色目录下的 data.json 和 roleinformation.js (角色信息)
+// 依赖：roleId.js、roleinformation.js、角色目录下的 data.json
 // ============================================================
 
 import sharp from 'sharp'
@@ -236,11 +236,11 @@ async function generateCrop(game) {
         const shortSide = Math.min(w, h)
         let ratio = 0.25
         if (mode === 'splash') {
-            ratio = 0.09
+            ratio = 0.10   // 立绘模式裁剪比例
         }
         const side = Math.max(50, Math.round(shortSide * ratio))
 
-        // ★ splash 模式：纹理 30% + 方差 25% + 中心 25% + 色相多样度 2.5% + 亮度对比度 2.5% - 边缘惩罚 15%
+        // ★ splash 模式：纹理 35% + 方差 25% + 中心 20% + 色相 2.5% + 对比度 2.5% - 边缘惩罚 10%
         if (mode === 'splash') {
             const candidates = []
             for (let i = 0; i < 30; i++) {
@@ -268,7 +268,7 @@ async function generateCrop(game) {
             for (const cand of candidates) {
                 const cx = cand.x, cy = cand.y
 
-                // ---- 颜色方差、纹理、色相多样度、亮度对比度（跳过透明像素） ----
+                // ---- 计算各项指标（跳过透明像素） ----
                 let sumR = 0, sumG = 0, sumB = 0, count = 0
                 const luminances = []
                 const hueSet = new Set()
@@ -280,7 +280,7 @@ async function generateCrop(game) {
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
 
-                        // ★ 跳过透明/半透明像素
+                        // 跳过透明/半透明像素
                         const alpha = data[idx + 3]
                         if (alpha < 128) continue
 
@@ -293,13 +293,12 @@ async function generateCrop(game) {
                         sumG += data[idx + 1]
                         sumB += data[idx + 2]
                         count++
-
                         luminances.push(lum)
 
                         if (lum < lumMin) lumMin = lum
                         if (lum > lumMax) lumMax = lum
 
-                        // 色相多样度
+                        // 色相分组（12个bin）
                         const max = Math.max(r, g, b)
                         const min = Math.min(r, g, b)
                         if (max !== min) {
@@ -313,7 +312,7 @@ async function generateCrop(game) {
                     }
                 }
 
-                // 如果有效像素太少（< 区域的 30%），直接淘汰
+                // 有效像素太少则淘汰
                 if (count < side * side * 0.3) continue
 
                 // ---- 颜色方差 ----
@@ -324,8 +323,7 @@ async function generateCrop(game) {
                         const px = cx + dx, py = cy + dy
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
-                        const alpha = data[idx + 3]
-                        if (alpha < 128) continue
+                        if (data[idx + 3] < 128) continue
                         const dr = data[idx] - avgR
                         const dg = data[idx + 1] - avgG
                         const db = data[idx + 2] - avgB
@@ -360,7 +358,7 @@ async function generateCrop(game) {
                 // ---- 亮度对比度 ----
                 const contrastScore = Math.min((lumMax - lumMin), 1.0)
 
-                // ---- 边缘惩罚（跳过底部） ----
+                // ---- 边缘惩罚（仅左/右/上，跳过底部） ----
                 const distToLeft = regionCenterX
                 const distToRight = w - regionCenterX
                 const distToTop = regionCenterY
@@ -381,9 +379,9 @@ async function generateCrop(game) {
                 })
             }
 
-            // 归一化方差
+            // 归一化方差并计算最终得分
             if (varianceScores.length === 0) {
-                // 没有有效候选，用纯随机
+                // 无有效候选，回退随机
                 const maxX = w - side, maxY = h - side
                 game.cropX = Math.round(Math.random() * Math.max(0, maxX))
                 game.cropY = Math.round(Math.random() * Math.max(0, maxY))
@@ -394,13 +392,14 @@ async function generateCrop(game) {
 
                 for (const item of scores) {
                     const normVariance = (item.varianceScore - minVariance) / varianceRange
+                    // ★ 权重：纹理 35% + 方差 25% + 中心 20% + 色相 2.5% + 对比度 2.5% - 边缘惩罚 10%
                     const combinedScore =
-                        item.textureScore * 0.30 +
+                        item.textureScore * 0.35 +
                         normVariance * 0.25 +
-                        item.centerScore * 0.25 +
+                        item.centerScore * 0.20 +
                         item.hueDiversity * 0.025 +
                         item.contrastScore * 0.025 -
-                        item.edgePenalty * 0.15
+                        item.edgePenalty * 0.10
                     if (combinedScore > bestScore) {
                         bestScore = combinedScore
                         bestPos = { x: item.cand.x, y: item.cand.y }
@@ -553,7 +552,6 @@ export class Guess extends plugin {
                 { reg: '^#命座猜角色(简单|普通|困难)?$', fnc: 'startConstellation' },
                 { reg: '^#天赋猜角色(简单|普通|困难)?$', fnc: 'startTalent' },
                 { reg: '^#料理猜角色(简单|普通|困难)?$', fnc: 'startFood' },
-                // ★ 指令统一：头像、头像侧脸、角色、立绘、困难、地狱、小名片、名片
                 { reg: '^#猜(头像(?:侧脸)?|角色(?:困难|地狱|小名片|名片)?|立绘)$', fnc: 'guessCommand' },
                 { reg: '^#提示$', fnc: 'hint' },
                 { reg: '^#看答案$', fnc: 'reveal' },
@@ -595,7 +593,7 @@ export class Guess extends plugin {
   #猜头像          - 仅显示角色头像局部
   #猜头像侧脸      - 仅显示角色侧脸头像局部
   #猜角色          - 显示抽卡立绘图局部（无滤镜）
-  #猜立绘          - 显示全身立绘图局部（无滤镜）
+  #猜立绘          - 显示全身立绘图局部（无滤镜，智能裁剪）
   #猜角色困难      - 黑白效果 + 抽卡立绘局部
   #猜角色地狱      - 反色效果 + 抽卡立绘局部
   #猜角色小名片    - 显示小名片局部

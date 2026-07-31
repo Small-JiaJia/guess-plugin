@@ -15,7 +15,6 @@ pnpm install -P
 
 ### 功能一览列表
 
-【启动游戏】
 |指令|说明|
 |-----|-----|
 |#猜角色帮助|展示指令列表|
@@ -36,8 +35,6 @@ pnpm install -P
 |#料理猜角色|显示特色料理，初始1条提示|
 |#料理猜角色简单|显示特色料理，初始2条提示|
 |#料理猜角色困难|显示特色料理，初始无提示|
-
-【游戏进行】
 |#提示|扩大显示区域 / 揭示更多角色信息|
 |#看答案|揭晓答案|
 |#结束|结束当前游戏|
@@ -46,19 +43,23 @@ pnpm install -P
 直接发送角色名或别名即可作答
 
 ### 未来计划（咕咕咕~）
-1.新增 生日贺图 玩法？
-2.制作#猜角色帮助 渲染图？
-3.新增 群友pk 玩法？
-4.新增 眼睛猜角色 玩法？
-5.摆烂？！（极大概率）
+| 项目 |
+| :--- |
+| 1.新增 生日贺图 玩法？| 
+| 2.制作#猜角色帮助 渲染图？| 
+| 3.新增 群友pk 玩法？| 
+| 4.新增 眼睛猜角色 玩法？| 
+| 5.摆烂？！（极大概率）| 
 
 ### 更新插件
 没有内置更新功能，更新请手动拉取本项目
 
 ### 致谢
-constant.js和index.js代码 来自[TianRu-plugin](https://gitee.com/HDTianRu/TianRu-plugin)
-genshin文件夹部分资源 来自[miao-plugin](https://github.com/yoimiya-kokomi/miao-plugin)
-特殊料理资源 来自[Bwiki](https://wiki.biligame.com/ys/%E9%A3%9F%E7%89%A9%E4%B8%80%E8%A7%88)
+| 贡献 | 项目 |
+| :--- | :--- |
+| constant.js和index.js代码 | 来自[TianRu-plugin](https://gitee.com/HDTianRu/TianRu-plugin)| 
+| genshin文件夹部分资源 | 来自[miao-plugin](https://github.com/yoimiya-kokomi/miao-plugin)| 
+| 特殊料理资源 | 来自[Bwiki](https://wiki.biligame.com/ys/%E9%A3%9F%E7%89%A9%E4%B8%80%E8%A7%88)| 
 
 ### Ciallo～(∠・ω< )⌒☆
 * 如果你觉得本插件还行，不妨请留下一个免费的star吧，你的支持是我们前进的最大动力
