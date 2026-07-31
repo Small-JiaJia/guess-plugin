@@ -19,8 +19,12 @@ const ROLE_DATA_PATH = path.join(__dirname, '../data/roleId.js')
 const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character')
 
 // ---------- 游戏状态 ----------
-const games = new Map()
-const GAME_TIMEOUT = 5 * 60 * 1000
+const games = new Map()                       // 每个群的进行中游戏
+const GAME_TIMEOUT = 5 * 60 * 1000            // 游戏超时 5 分钟
+
+// ---------- 冷却机制 ----------
+const COOLDOWN_MS = 24 * 60 * 60 * 1000       // 冷却时间 24 小时
+const recentlyUsed = new Map()                // 角色名 → 上次出现时间戳
 
 // ---------- 角色别名缓存 ----------
 let roleNames = null
@@ -660,6 +664,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 根据难度确定模式和初始提示数
         let mode, initialHintCount
         switch (difficulty) {
             case '简单':
@@ -676,22 +681,42 @@ export class Guess extends plugin {
                 break
         }
 
-        let availableNames = []
+        // 获取所有可用角色（含冷却过滤）
+        const now = Date.now()
+        let allAvailable = []
         for (const name of this.roleNames) {
+            // 料理模式需额外检查是否有特色料理
             if (baseMode === 'food') {
                 const info = REGION_MAP[name]
                 if (!info || !info.specialDish) continue
             }
             if (checkImageExists(mode, name)) {
-                availableNames.push(name)
+                allAvailable.push(name)
             }
         }
+
+        // ★ 冷却过滤：排除在冷却中的角色
+        let availableNames = allAvailable.filter(name => {
+            const lastUsed = recentlyUsed.get(name) || 0
+            return now - lastUsed >= COOLDOWN_MS
+        })
+
+        // ★ 如果冷却后没有可用角色，清空冷却记录，全部重置为可用
+        if (availableNames.length === 0) {
+            recentlyUsed.clear()
+            availableNames = allAvailable
+            logger?.info('[猜角色] 冷却已清空，所有角色重新可用')
+        }
+
         if (availableNames.length === 0) {
             await e.reply(`未找到任何角色的${modeName}图标，请检查图片目录`)
             return false
         }
 
         const name = randomItem(availableNames)
+        // ★ 记录出场时间
+        recentlyUsed.set(name, now)
+
         const extra = getExtraData(name)
         if (!extra) {
             await e.reply(`角色 ${name} 的 data.json 不存在，无法开始游戏`)
@@ -709,6 +734,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 构建提示池（打乱顺序）
         const hintPool = [
             { key: 'star', label: '稀有度', value: extra.star === 5 ? '五星 ★★★★★' : '四星 ★★★★' },
             { key: 'element', label: '元素属性', value: extra.element },
@@ -907,7 +933,7 @@ export class Guess extends plugin {
         return this.startGame(e, mode)
     }
 
-    // ---------- 普通猜角色启动 ----------
+    // ---------- 普通猜角色启动（头像、立绘、抽卡立绘等） ----------
     async startGame(e, mode) {
         if (!this.loaded) {
             await this.loadData()
@@ -925,20 +951,31 @@ export class Guess extends plugin {
             return false
         }
 
-        let name = null
-        let attempts = 0
-        while (attempts < 30) {
-            const candidate = randomItem(this.roleNames)
-            if (checkImageExists(mode, candidate)) {
-                name = candidate
-                break
-            }
-            attempts++
+        // 获取所有可用角色（含冷却过滤）
+        const now = Date.now()
+        const allAvailable = this.roleNames.filter(name => checkImageExists(mode, name))
+
+        // ★ 冷却过滤：排除在冷却中的角色
+        let availableNames = allAvailable.filter(name => {
+            const lastUsed = recentlyUsed.get(name) || 0
+            return now - lastUsed >= COOLDOWN_MS
+        })
+
+        // ★ 如果冷却后没有可用角色，清空冷却记录，全部重置为可用
+        if (availableNames.length === 0) {
+            recentlyUsed.clear()
+            availableNames = allAvailable
+            logger?.info('[猜角色] 冷却已清空，所有角色重新可用')
         }
-        if (!name) {
+
+        if (availableNames.length === 0) {
             await e.reply(`未找到可用的角色图片 (模式: ${mode})`)
             return false
         }
+
+        const name = randomItem(availableNames)
+        // ★ 记录出场时间
+        recentlyUsed.set(name, now)
 
         const game = { mode, name, startedAt: Date.now(), groupId }
         try {
