@@ -15,21 +15,31 @@ import REGION_MAP from '../data/roleinformation.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // ---------- 路径常量 ----------
+// 角色别名数据文件路径
 const ROLE_DATA_PATH = path.join(__dirname, '../data/roleId.js')
+// 角色资源目录（包含每个角色的 imgs、icons 等）
 const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character')
+// 生日贺语 JSON 数据文件路径
 const BIRTHDAY_MSG_PATH = path.join(__dirname, '../data/birthdayMessages.json')
 
 // ---------- 游戏状态 ----------
+// 存储每个群正在进行的游戏（groupId → game对象）
 const games = new Map()
+// 游戏超时时间 5 分钟
 const GAME_TIMEOUT = 5 * 60 * 1000
 
 // ---------- 冷却机制 ----------
+// 角色冷却时间 24 小时（避免同一角色短时间内频繁出现）
 const COOLDOWN_MS = 24 * 60 * 60 * 1000
+// 记录每个角色上次出现的时间戳（角色名 → 时间戳）
 const recentlyUsed = new Map()
 
 // ---------- 角色别名缓存 ----------
+// 所有角色名列表（从 roleId.js 提取的主名）
 let roleNames = null
+// 别名 → 主名 的映射表
 let aliasMap = null
+// 防止重复加载的标志
 let roleLoading = false
 
 // ---------- 生日贺语缓存 ----------
@@ -37,6 +47,7 @@ let birthdayMessages = null
 let msgLoading = false
 
 // ---------- 加载角色别名数据 ----------
+// 从 roleId.js 中提取所有角色主名和别名，建立映射
 async function loadRoleData() {
     if (roleNames && aliasMap) return { roleNames, aliasMap }
     if (roleLoading) {
@@ -45,12 +56,14 @@ async function loadRoleData() {
     }
     roleLoading = true
     try {
+        // 动态导入 roleId.js（使用 pathToFileURL 解决 Windows 路径问题）
         const fileUrl = pathToFileURL(ROLE_DATA_PATH).href + '?t=' + Date.now()
         const module = await import(fileUrl)
         const data = module.default || module
 
         const names = []
         const alias = {}
+        // 遍历每个角色的数据，数组第一个元素为主名，其余为别名
         for (const [id, arr] of Object.entries(data)) {
             if (!Array.isArray(arr) || arr.length === 0) continue
             const mainName = arr[0]
@@ -76,6 +89,7 @@ async function loadRoleData() {
 }
 
 // ---------- 加载生日贺语数据 ----------
+// 使用 fs.readFileSync 直接读取 JSON 文件（避免 ESM import 属性问题）
 async function loadBirthdayMessages() {
     if (birthdayMessages) return birthdayMessages
     if (msgLoading) {
@@ -97,8 +111,10 @@ async function loadBirthdayMessages() {
 }
 
 // ---------- 工具函数 ----------
+// 从数组中随机取一项
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 
+// Fisher–Yates 洗牌算法，用于打乱提示顺序
 function shuffleArray(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -108,6 +124,7 @@ function shuffleArray(arr) {
 }
 
 // ---------- 从 data.json 读取角色信息 ----------
+// 每个角色目录下的 data.json 包含角色详细信息
 function readDataJson(name) {
     const jsonPath = path.join(GENSHIN_CHARACTER_DIR, name, 'data.json')
     if (!fs.existsSync(jsonPath)) return null
@@ -119,11 +136,14 @@ function readDataJson(name) {
     }
 }
 
+// 获取角色的额外数据（元素、武器、所属、地区、料理等）
+// 优先从 data.json 读取，部分字段从 roleinformation.js 补充
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
     const roleInfo = REGION_MAP[name] || {}
 
+    // 武器类型英文→中文映射
     const weaponMap = {
         'sword': '单手剑',
         'claymore': '双手剑',
@@ -131,6 +151,7 @@ function getExtraData(name) {
         'bow': '弓',
         'catalyst': '法器'
     }
+    // 元素属性英文→中文映射
     const elementMap = {
         'pyro': '火',
         'hydro': '水',
@@ -143,24 +164,26 @@ function getExtraData(name) {
     }
 
     return {
-        star: json.star || 5,
-        rarity: json.star || 5,
-        weapon: weaponMap[json.weapon] || json.weapon || '未知',
-        allegiance: json.allegiance || '未知',
-        region: roleInfo.region || '未知',
-        specialDish: roleInfo.specialDish || null,
-        element: elementMap[json.elem] || json.elem || '未知',
-        title: json.title || null,
-        astro: json.astro || null,
-        birth: json.birth ? json.birth.replace('-', '月') + '日' : null,
+        star: json.star || 5,                                  // 星级
+        rarity: json.star || 5,                                // 同 star
+        weapon: weaponMap[json.weapon] || json.weapon || '未知', // 武器类型（中文）
+        allegiance: json.allegiance || '未知',                  // 所属（组织/势力）
+        region: roleInfo.region || '未知',                      // 所属地区（国家/城市）
+        specialDish: roleInfo.specialDish || null,              // 特色料理名称
+        element: elementMap[json.elem] || json.elem || '未知',  // 元素属性（中文）
+        title: json.title || null,                              // 称号
+        astro: json.astro || null,                              // 命之座名称
+        birth: json.birth ? json.birth.replace('-', '月') + '日' : null, // 生日（月日）
     }
 }
 
 // ---------- 获取生日贺语 ----------
+// 根据角色名和年份从 birthdayMessages 中查找对应贺语
 function getBirthdayMessage(name, year) {
     if (!birthdayMessages) return null
     const msgs = birthdayMessages[name] || {}
     if (msgs[year]) return msgs[year]
+    // 若无该年份，则取最近年份（小于等于当前年份）
     const years = Object.keys(msgs).map(Number).sort((a, b) => b - a)
     for (const y of years) {
         if (y <= year) return msgs[y]
@@ -169,6 +192,7 @@ function getBirthdayMessage(name, year) {
 }
 
 // ---------- 获取生日完整日期 ----------
+// 从 data.json 的 birth 字段提取月日，格式化为 "X月Y日"
 function getBirthDateString(json) {
     if (!json || !json.birth) return null
     const parts = json.birth.split('-')
@@ -177,12 +201,14 @@ function getBirthDateString(json) {
 }
 
 // ---------- 格式化贺语 ----------
+// 将贺语中的 <br> 替换为换行符 \n
 function formatBirthdayMessage(msg) {
     if (!msg) return null
     return msg.replace(/<br>/g, '\n').trim()
 }
 
 // ---------- 生成信封格式答案 ----------
+// 用于生日贺图答对或看答案时显示
 function buildEnvelopeAnswer(name, year, extra, msg, json) {
     const dateStr = getBirthDateString(json) || '未知日期'
     const formattedMsg = formatBirthdayMessage(msg)
@@ -196,14 +222,16 @@ function buildEnvelopeAnswer(name, year, extra, msg, json) {
 }
 
 // ---------- ★ 核心：获取图片路径（支持默认和特殊立绘随机） ----------
+// 普通模式（头像/立绘/角色等）支持随机选择默认或特殊立绘
+// 特殊立绘命名规则：face2.webp、side2.webp、splash2.webp
 function getImagePath(mode, name, fixedPath = null) {
-    // 固定路径优先（生日贺图专用）
+    // 如果传入了固定路径，优先使用（用于生日贺图）
     if (fixedPath) {
         if (fs.existsSync(fixedPath)) return fixedPath
         return null
     }
 
-    // 生日贺图模式
+    // 生日贺图模式：从 imgs 目录中随机选一张 Birthday-年份.webp
     if (mode === 'birthday') {
         const img = getRandomBirthdayImage(name)
         return img ? img.filePath : null
@@ -215,14 +243,14 @@ function getImagePath(mode, name, fixedPath = null) {
         return fs.existsSync(p) ? p : null
     }
 
-    // ★ 命座模式
+    // ★ 命座模式：从 cons-1~6.webp 中随机选一张
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard') {
         const num = Math.floor(Math.random() * 6) + 1
         const p = path.join(GENSHIN_CHARACTER_DIR, name, 'icons', `cons-${num}.webp`)
         return fs.existsSync(p) ? p : null
     }
 
-    // ★ 天赋模式
+    // ★ 天赋模式：从 passive-数字.webp 中随机选一张
     if (mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard') {
         const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'icons')
         if (!fs.existsSync(dir)) return null
@@ -270,6 +298,7 @@ function getImagePath(mode, name, fixedPath = null) {
 }
 
 // ---------- 检查图片是否存在 ----------
+// 判断角色是否有对应模式的图片（用于筛选可用角色）
 function checkImageExists(mode, name) {
     // 料理模式（包含简单和困难）
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
@@ -288,7 +317,7 @@ function checkImageExists(mode, name) {
         const files = fs.readdirSync(dir).filter(f => /^passive-\d+\.webp$/.test(f))
         return files.length > 0
     }
-    // 普通模式
+    // 普通模式（头像、立绘等）
     const fileNameMap = {
         'avatar': 'face',
         'avatar_side': 'side',
@@ -317,6 +346,7 @@ function checkImageExists(mode, name) {
 }
 
 // ---------- 获取固定图标路径（用于命座/天赋/料理/生日） ----------
+// 游戏开始时固定图片路径，后续提示不再更改
 function getFixedIconPath(mode, name) {
     if (mode === 'birthday') {
         const img = getRandomBirthdayImage(name)
@@ -341,11 +371,12 @@ function getFixedIconPath(mode, name) {
         if (files.length === 0) return null
         return path.join(dir, randomItem(files))
     }
-    // 普通模式：调用 getImagePath
+    // 普通模式：调用 getImagePath 获取随机图片（用于预选）
     return getImagePath(mode, name)
 }
 
 // ---------- 生日贺图辅助函数 ----------
+// 检查角色是否有生日贺图
 function hasBirthdayImages(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return false
@@ -353,6 +384,7 @@ function hasBirthdayImages(name) {
     return files.some(f => /^Birthday-\d+\.(webp|png|jpg|jpeg)$/i.test(f))
 }
 
+// 随机获取一张生日贺图路径和年份
 function getRandomBirthdayImage(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return null
@@ -364,6 +396,7 @@ function getRandomBirthdayImage(name) {
     return { filePath: path.join(dir, selected), year }
 }
 
+// 根据角色名和年份获取对应的生日贺图路径
 function getBirthdayImagePath(name, year) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     const exts = ['.webp', '.png', '.jpg', '.jpeg']
@@ -374,6 +407,7 @@ function getBirthdayImagePath(name, year) {
     return null
 }
 // ---------- 图像生成核心 ----------
+// 根据游戏状态生成裁剪图（普通模式）或全图（图标模式）
 async function generateCrop(game) {
     const { mode, name, iconPath, imgPath } = game
 
@@ -396,23 +430,29 @@ async function generateCrop(game) {
     const metadata = await image.metadata()
     const w = metadata.width, h = metadata.height
 
+    // 如果尚未初始化裁剪参数（首次或提示后重置）
     if (!game.cropSide) {
         const shortSide = Math.min(w, h)
+        // 立绘和生日贺图使用更小裁剪比例（10%），其他模式 25%
         let ratio = 0.25
         if (mode === 'splash' || mode === 'birthday') {
             ratio = 0.10
         }
         const side = Math.max(50, Math.round(shortSide * ratio))
 
+        // 智能裁剪分支：立绘（splash）和生日贺图（birthday）
         if (mode === 'splash' || mode === 'birthday') {
             const isBirthday = (mode === 'birthday')
+            // 生日模式排除四角 Logo 区域（15% 边距）
             const cornerMargin = isBirthday ? 0.15 : 0.0
 
+            // ★ 距离约束：新裁剪位置与已显示位置的最小间距
             const minDistance = Math.max(30, side * 1.2)
             let candidates = []
             let attempts = 0
             const maxAttempts = 200
 
+            // 生成 30 个候选位置（带距离约束）
             while (candidates.length < 30 && attempts < maxAttempts) {
                 attempts++
                 const maxX = w - side
@@ -420,6 +460,7 @@ async function generateCrop(game) {
                 let x = Math.round(Math.random() * Math.max(0, maxX))
                 let y = Math.round(Math.random() * Math.max(0, maxY))
 
+                // 生日模式：硬性排除四角区域
                 if (isBirthday) {
                     const cx = x + side / 2
                     const cy = y + side / 2
@@ -432,6 +473,7 @@ async function generateCrop(game) {
                     if (inCorner) continue
                 }
 
+                // 检查与所有已显示区域的距离
                 let tooClose = false
                 if (game.shownBounds && game.shownBounds.length > 0) {
                     const cx = x + side / 2
@@ -452,6 +494,7 @@ async function generateCrop(game) {
                 }
             }
 
+            // 如果候选不足 10 个，补一些无约束随机位置
             while (candidates.length < 10) {
                 const maxX = w - side
                 const maxY = h - side
@@ -471,6 +514,7 @@ async function generateCrop(game) {
                 candidates.push({ x, y })
             }
 
+            // ---- 提取图像原始像素数据 ----
             const { data, info } = await image.clone().raw().toBuffer({ resolveWithObject: true })
             const channels = info.channels
 
@@ -485,9 +529,11 @@ async function generateCrop(game) {
             const scores = []
             let varianceScores = []
 
+            // 遍历所有候选，计算各项评分指标
             for (const cand of candidates) {
                 const cx = cand.x, cy = cand.y
 
+                // ---- 计算各项指标（跳过透明像素） ----
                 let sumR = 0, sumG = 0, sumB = 0, count = 0
                 const luminances = []
                 const hueSet = new Set()
@@ -500,6 +546,7 @@ async function generateCrop(game) {
                         const px = cx + dx, py = cy + dy
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
+                        // 跳过透明像素（alpha < 128）
                         const alpha = data[idx + 3]
                         if (alpha < 128) continue
 
@@ -516,6 +563,7 @@ async function generateCrop(game) {
                         if (lum < lumMin) lumMin = lum
                         if (lum > lumMax) lumMax = lum
 
+                        // 色相多样度：统计色相类别数（12个bin）
                         const max = Math.max(r, g, b)
                         const min = Math.min(r, g, b)
                         if (max !== min) {
@@ -527,6 +575,7 @@ async function generateCrop(game) {
                             hueSet.add(hueBin)
                         }
 
+                        // 饱和度（HSV 中的 S 通道）
                         const maxRGB = Math.max(r, g, b)
                         const minRGB = Math.min(r, g, b)
                         const s = (maxRGB === 0) ? 0 : (1 - minRGB / maxRGB)
@@ -536,8 +585,10 @@ async function generateCrop(game) {
                     }
                 }
 
+                // 有效像素太少则淘汰
                 if (count < side * side * 0.3) continue
 
+                // ---- 颜色方差 ----
                 const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count
                 let varR = 0, varG = 0, varB = 0
                 for (let dy = 0; dy < side; dy++) {
@@ -557,6 +608,7 @@ async function generateCrop(game) {
                 const varianceScore = varR + varG + varB
                 varianceScores.push(varianceScore)
 
+                // ---- 纹理（亮度标准差） ----
                 const meanLum = luminances.reduce((a, b) => a + b, 0) / luminances.length
                 let varLum = 0
                 for (const lum of luminances) {
@@ -564,6 +616,7 @@ async function generateCrop(game) {
                 }
                 const textureScore = Math.sqrt(varLum / luminances.length) / 255
 
+                // ---- 中心贴近度 ----
                 const regionCenterX = cx + side / 2
                 const regionCenterY = cy + side / 2
                 const distToCenter = Math.sqrt(
@@ -572,13 +625,18 @@ async function generateCrop(game) {
                 )
                 const centerScore = 1 - (distToCenter / maxDist)
 
+                // ---- 色相多样度 ----
                 const hueDiversity = Math.min(hueSet.size / 12, 1.0)
+
+                // ---- 亮度对比度 ----
                 const contrastScore = Math.min((lumMax - lumMin), 1.0)
 
+                // ---- 饱和度方差 ----
                 const meanS = sumS / sCount
                 const varS = sumS2 / sCount - meanS * meanS
                 const satStd = Math.sqrt(Math.max(varS, 0))
 
+                // ---- 边缘惩罚（仅左/右/上，跳过底部） ----
                 const distToLeft = regionCenterX
                 const distToRight = w - regionCenterX
                 const distToTop = regionCenterY
@@ -600,7 +658,9 @@ async function generateCrop(game) {
                 })
             }
 
+            // 归一化方差和饱和度方差，计算最终得分
             if (varianceScores.length === 0) {
+                // 无有效候选，回退随机
                 const maxX = w - side, maxY = h - side
                 game.cropX = Math.round(Math.random() * Math.max(0, maxX))
                 game.cropY = Math.round(Math.random() * Math.max(0, maxY))
@@ -620,6 +680,7 @@ async function generateCrop(game) {
 
                     let combinedScore
                     if (mode === 'birthday') {
+                        // ★ 生日贺图专用权重：饱和度方差 28% + 亮度对比度 28% + 中心 24% + 色相 10% + 纹理 10% - 边缘惩罚 10%
                         combinedScore =
                             normSat * 0.28 +
                             item.contrastScore * 0.28 +
@@ -628,6 +689,7 @@ async function generateCrop(game) {
                             item.textureScore * 0.10 -
                             item.edgePenalty * 0.10
                     } else {
+                        // ★ 立绘模式（splash）权重：纹理 35% + 方差 25% + 中心 20% + 色相 2.5% + 对比度 2.5% - 边缘惩罚 10%
                         combinedScore =
                             item.textureScore * 0.35 +
                             normVariance * 0.25 +
@@ -646,6 +708,7 @@ async function generateCrop(game) {
                 game.cropY = bestPos.y
             }
         } else {
+            // 其他模式：纯随机裁剪
             const maxX = w - side, maxY = h - side
             game.cropX = Math.round(Math.random() * Math.max(0, maxX))
             game.cropY = Math.round(Math.random() * Math.max(0, maxY))
@@ -655,11 +718,13 @@ async function generateCrop(game) {
         game.imageWidth = w
         game.imageHeight = h
         game.hints = 0
+        // 仅在首次初始化时创建空数组，保留已有记录（提示时重置不会清空）
         if (!game.shownBounds) {
             game.shownBounds = []
         }
     }
 
+    // 记录当前裁剪区域到历史（用于最终合成图）
     const currentBounds = {
         left: game.cropX,
         top: game.cropY,
@@ -674,6 +739,7 @@ async function generateCrop(game) {
         game.shownBounds.push(currentBounds)
     }
 
+    // 执行裁剪并生成输出
     let pipeline = image.extract({
         left: game.cropX,
         top: game.cropY,
@@ -681,6 +747,7 @@ async function generateCrop(game) {
         height: game.cropSide
     }).resize(360, 360, { fit: 'fill' })
 
+    // 困难/地狱模式应用滤镜
     if (mode === 'hard') {
         pipeline = pipeline.grayscale()
     } else if (mode === 'hell') {
@@ -690,6 +757,8 @@ async function generateCrop(game) {
     return await pipeline.webp({ quality: 90 }).toBuffer()
 }
 
+// ---------- 扩大裁剪区域（用于普通模式提示） ----------
+// 每次提示将裁剪框扩大 1.5 倍，直到覆盖全图
 function enlargeCrop(game) {
     const { imageWidth, imageHeight, cropX, cropY, cropSide } = game
     const minSide = Math.min(imageWidth, imageHeight)
@@ -705,6 +774,7 @@ function enlargeCrop(game) {
     game.cropSide = newSide
     game.hints = (game.hints || 0) + 1
 
+    // 记录新区域
     const newBounds = {
         left: newX,
         top: newY,
@@ -719,9 +789,11 @@ function enlargeCrop(game) {
         game.shownBounds.push(newBounds)
     }
 
-    return newSide >= minSide
+    return newSide >= minSide  // 是否已全覆盖
 }
 
+// ---------- 生成揭晓合成图（裁剪区域清晰，其余阴影+红框） ----------
+// 用于答对或看答案时展示所有历史裁剪区域
 async function renderReveal(game) {
     let filePath
     if (game.mode === 'birthday') {
@@ -742,6 +814,7 @@ async function renderReveal(game) {
 
     const shownBounds = game.shownBounds || []
 
+    // 遍历像素：裁剪区域保持原色，其余变暗
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const idx = (y * width + x) * channels
@@ -761,6 +834,7 @@ async function renderReveal(game) {
         }
     }
 
+    // 为每个历史裁剪区域绘制红框
     for (const bounds of shownBounds) {
         const x1 = bounds.left
         const y1 = bounds.top
@@ -812,6 +886,7 @@ export class Guess extends plugin {
         this.loadData()
     }
 
+    // ---------- 初始化加载 ----------
     async loadData() {
         try {
             await Promise.all([loadRoleData(), loadBirthdayMessages()])
@@ -824,6 +899,7 @@ export class Guess extends plugin {
         }
     }
 
+    // ---------- 清理超时游戏 ----------
     cleanTimeout(groupId) {
         const game = games.get(groupId)
         if (game && Date.now() - game.startedAt > GAME_TIMEOUT) {
@@ -833,6 +909,7 @@ export class Guess extends plugin {
         return false
     }
 
+    // ---------- 帮助指令 ----------
     async help(e) {
         const helpText = `
 猜角色帮助
@@ -910,6 +987,7 @@ export class Guess extends plugin {
         }
 
         const now = Date.now()
+        // 获取所有有生日贺图的角色（含冷却过滤）
         const allAvailable = this.roleNames.filter(name => hasBirthdayImages(name))
         let availableNames = allAvailable.filter(name => {
             const lastUsed = recentlyUsed.get(name) || 0
@@ -927,7 +1005,7 @@ export class Guess extends plugin {
         }
 
         const name = randomItem(availableNames)
-        recentlyUsed.set(name, now)
+        recentlyUsed.set(name, now)  // 记录出场时间
 
         const extra = getExtraData(name)
         if (!extra) {
@@ -935,6 +1013,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 固定一张生日贺图
         const imgInfo = getRandomBirthdayImage(name)
         if (!imgInfo) {
             await e.reply(`角色 ${name} 的生日贺图不存在，请检查图片`)
@@ -948,7 +1027,7 @@ export class Guess extends plugin {
         const game = {
             mode: 'birthday',
             name,
-            iconPath,
+            iconPath,          // 固定图片路径
             year,
             json,
             startedAt: Date.now(),
@@ -957,8 +1036,8 @@ export class Guess extends plugin {
             isBirthday: true,
             cropSide: 0,
             shownBounds: [],
-            hintCount: 0,
-            maxHints: 5,
+            hintCount: 0,      // 已提示次数
+            maxHints: 5,       // 最大提示次数
         }
 
         try {
@@ -974,7 +1053,7 @@ export class Guess extends plugin {
         return true
     }
 
-    // ---------- 图标猜角色通用启动器 ----------
+    // ---------- 图标猜角色通用启动器（命座/天赋/料理） ----------
     async startIconGame(e, baseMode, difficulty, modeName) {
         if (!this.loaded) {
             await this.loadData()
@@ -992,6 +1071,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 根据难度确定模式和初始提示数
         let mode, initialHintCount
         switch (difficulty) {
             case '简单':
@@ -1020,6 +1100,7 @@ export class Guess extends plugin {
             }
         }
 
+        // 冷却过滤
         let availableNames = allAvailable.filter(name => {
             const lastUsed = recentlyUsed.get(name) || 0
             return now - lastUsed >= COOLDOWN_MS
@@ -1049,12 +1130,14 @@ export class Guess extends plugin {
             return false
         }
 
+        // 固定图片路径
         const iconPath = getFixedIconPath(mode, name)
         if (!iconPath) {
             await e.reply(`未找到 ${name} 的${modeName}图片文件`)
             return false
         }
 
+        // 构建提示池（打乱顺序）
         const hintPool = [
             { key: 'star', label: '稀有度', value: extra.star === 5 ? '五星 ★★★★★' : '四星 ★★★★' },
             { key: 'element', label: '元素属性', value: extra.element },
@@ -1100,6 +1183,7 @@ export class Guess extends plugin {
         return true
     }
 
+    // ---------- 构建提示消息 ----------
     buildHintMessage(game) {
         const revealedCount = Math.min(game.hintIndex + 1, game.hintPool.length)
         const revealedHints = game.hintPool.slice(0, revealedCount)
@@ -1137,6 +1221,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 生日贺图模式：限制提示次数，达到上限则自动揭示答案
         if (game.mode === 'birthday') {
             if (!game.hintCount) game.hintCount = 0
             if (!game.maxHints) game.maxHints = 5
@@ -1147,6 +1232,7 @@ export class Guess extends plugin {
                 return true
             }
 
+            // 重置裁剪位置（保留历史区域）
             game.cropSide = 0
             game.cropX = undefined
             game.cropY = undefined
@@ -1162,6 +1248,7 @@ export class Guess extends plugin {
             return true
         }
 
+        // 图标模式（命座/天赋/料理）
         if (game.isIconMode) {
             if (game.hintIndex >= game.hintPool.length - 1) {
                 await e.reply('所有提示已给出，请作答或发送 #看答案')
@@ -1179,6 +1266,7 @@ export class Guess extends plugin {
             return true
         }
 
+        // 普通模式（头像/角色/立绘等）：扩大裁剪区域
         const minSide = Math.min(game.imageWidth, game.imageHeight)
         if (game.cropSide >= minSide) {
             await this.reveal(e)
@@ -1201,7 +1289,7 @@ export class Guess extends plugin {
 
     // ---------- 作答处理 ----------
     async guess(e) {
-        if (e.user_id === e.self_id) return false
+        if (e.user_id === e.self_id) return false  // 忽略机器人自己的消息
 
         const groupId = e.group_id
         if (!groupId) return false
@@ -1215,14 +1303,16 @@ export class Guess extends plugin {
         if (!e.msg || typeof e.msg !== 'string') return false
 
         const input = e.msg.trim()
-        if (input.startsWith('#')) return false
+        if (input.startsWith('#')) return false  // 避免干扰其他指令
 
+        // 通过别名映射查找角色名
         const knownName = this.aliasMap[input]
-        if (!knownName) return false
+        if (!knownName) return false  // 未知名称不处理
 
         const isCorrect = (input === game.name) || (knownName === game.name)
 
         if (isCorrect) {
+            // 生日贺图模式：显示合成图 + 贺语
             if (game.mode === 'birthday' && game.year) {
                 const msg = getBirthdayMessage(game.name, game.year)
                 const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
@@ -1248,6 +1338,7 @@ export class Guess extends plugin {
             } else if (game.isIconMode) {
                 await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
             } else {
+                // 普通模式：显示揭晓合成图
                 try {
                     const revealBuffer = await renderReveal(game)
                     await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`, segment.image(revealBuffer)])
@@ -1339,7 +1430,7 @@ export class Guess extends plugin {
         const name = randomItem(availableNames)
         recentlyUsed.set(name, now)
 
-        // ★ 在游戏开始时固定图片路径
+        // ★ 在游戏开始时固定图片路径（确保后续提示不换图）
         const imgPath = getImagePath(mode, name)
         if (!imgPath) {
             await e.reply(`未找到可用的角色图片 (模式: ${mode})`)
@@ -1387,6 +1478,7 @@ export class Guess extends plugin {
             return false
         }
 
+        // 生日贺图模式：显示合成图 + 贺语
         if (game.mode === 'birthday' && game.year) {
             const msg = getBirthdayMessage(game.name, game.year)
             const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
@@ -1410,12 +1502,14 @@ export class Guess extends plugin {
             return true
         }
 
+        // 图标模式
         if (game.isIconMode) {
             await e.reply(`答案是：${game.name}`)
             games.delete(groupId)
             return true
         }
 
+        // 普通模式
         try {
             const revealBuffer = await renderReveal(game)
             await e.reply([`答案是：${game.name}`, segment.image(revealBuffer)])
