@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "sharp": "^0.33.5",
-    "art-template": "^4.13.2"
+    "art-template": "^4.13.2",
+    "d3-delaunay": "^6.0.0"
   }
 }
