@@ -1806,7 +1806,7 @@ export class Guess extends plugin {
         return true
     }
 
-    // ---------- 作答处理 ----------
+    // ---------- 作答处理（游戏进行时独占消息） ----------
     async guess(e) {
         if (e.user_id === e.self_id) return false
 
@@ -1814,7 +1814,7 @@ export class Guess extends plugin {
         if (!groupId) return false
         if (this.cleanTimeout(groupId)) {
             await e.reply('游戏已超时，请重新开始')
-            return false
+            return true
         }
 
         // ★ 碎碎冰模式
@@ -1826,16 +1826,12 @@ export class Guess extends plugin {
             const input = e.msg.trim()
             if (input.startsWith('#')) return false
 
-            // ★ 检查输入是否为角色名或别名
             const knownName = this.aliasMap[input]
-            if (!knownName) {
-                return false  // 无关内容，静默忽略
-            }
+            if (!knownName) return false  // 不是角色名，放行
 
             const isCorrect = (input === puzzleState.name) || (knownName === puzzleState.name)
 
             if (isCorrect) {
-                // ★ 答对：使用碎碎冰专用不规则合成图
                 let revealBuffer = null
                 try {
                     revealBuffer = await renderPuzzleReveal(puzzleState)
@@ -1843,32 +1839,26 @@ export class Guess extends plugin {
                     logger?.error('[碎碎冰] 生成揭晓图失败', err)
                 }
                 let replyParts = [segment.at(e.user_id), ` 恭喜答对！答案是 ${puzzleState.name}`]
-                if (revealBuffer) {
-                    replyParts.push(segment.image(revealBuffer))
-                }
+                if (revealBuffer) replyParts.push(segment.image(revealBuffer))
                 await e.reply(replyParts)
                 cleanPuzzleGame(groupId)
-                return true
+                return true  // ★ 独占
             }
 
             // ★ 猜错：累加 wrongCount
             puzzleState.wrongCount++
 
-            // ★ 检查是否触发归位
             let merged = false
             for (const threshold of puzzleState.mergeThresholds) {
                 if (puzzleState.wrongCount === threshold) {
                     const revealed = puzzleState.fragments.filter(f => f.isRevealed)
                     const unplaced = revealed.filter(f => !f.isPlaced)
-                    for (const frag of unplaced) {
-                        frag.isPlaced = true
-                    }
+                    for (const frag of unplaced) frag.isPlaced = true
                     merged = true
                     break
                 }
             }
 
-            // ★ 如果没有触发归位，尝试揭示 1 块有效碎片
             let newRevealed = false
             if (!merged) {
                 const unrevealed = puzzleState.fragments.filter(f => !f.isRevealed)
@@ -1878,13 +1868,10 @@ export class Guess extends plugin {
                     randomFrag.isRevealed = true
                     newRevealed = true
                 } else if (unrevealed.length > 0) {
-                    // 只有无效碎片，直接归位
                     const revealed = puzzleState.fragments.filter(f => f.isRevealed)
                     const unplaced = revealed.filter(f => !f.isPlaced)
                     if (unplaced.length > 0) {
-                        for (const frag of unplaced) {
-                            frag.isPlaced = true
-                        }
+                        for (const frag of unplaced) frag.isPlaced = true
                         merged = true
                     }
                 }
@@ -1899,14 +1886,10 @@ export class Guess extends plugin {
                 replyMsg += `\n🧊 累计猜错 ${puzzleState.wrongCount} 次，已揭示的碎片全部归位！（已归位 ${totalPlaced}/${totalRevealed}）`
             } else if (newRevealed) {
                 replyMsg += `\n🧊 新揭示 1 块碎片（已揭示 ${totalRevealed}/${puzzleState.totalCount}）`
-                if (nextThreshold) {
-                    replyMsg += `（下次归位需累计猜错 ${nextThreshold} 次，当前 ${puzzleState.wrongCount}/${nextThreshold}）`
-                }
+                if (nextThreshold) replyMsg += `（下次归位需累计猜错 ${nextThreshold} 次，当前 ${puzzleState.wrongCount}/${nextThreshold}）`
             } else {
                 replyMsg += `\n🧊 所有碎片已揭示，继续猜吧！`
-                if (nextThreshold) {
-                    replyMsg += `（下次归位需累计猜错 ${nextThreshold} 次，当前 ${puzzleState.wrongCount}/${nextThreshold}）`
-                }
+                if (nextThreshold) replyMsg += `（下次归位需累计猜错 ${nextThreshold} 次，当前 ${puzzleState.wrongCount}/${nextThreshold}）`
             }
 
             try {
@@ -1921,45 +1904,39 @@ export class Guess extends plugin {
                 logger?.error('[碎碎冰] 更新失败', err)
                 await e.reply(replyMsg)
             }
-            return true
+            return true  // ★ 独占
         }
 
-        // 普通模式/图标模式/生日模式
+        // ★ 普通猜角色模式
         const game = games.get(groupId)
         if (!game) return false
 
         if (!e.msg || typeof e.msg !== 'string') return false
-
         const input = e.msg.trim()
         if (input.startsWith('#')) return false
 
         const knownName = this.aliasMap[input]
-        if (!knownName) return false
+        if (!knownName) return false  // 不是角色名，放行
 
         const isCorrect = (input === game.name) || (knownName === game.name)
 
         if (isCorrect) {
+            // 生日贺图模式
             if (game.mode === 'birthday' && game.year) {
                 const msg = getBirthdayMessage(game.name, game.year)
                 const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
-
                 let revealBuffer = null
                 try {
                     revealBuffer = await renderReveal(game)
                 } catch (err) {
                     logger?.error('[猜生日贺图] 生成揭晓图失败', err)
                 }
-
                 let replyParts = [
                     segment.at(e.user_id),
                     ` 恭喜答对！\n${game.year}年 『${game.name}』 生日贺图`
                 ]
-                if (revealBuffer) {
-                    replyParts.push(segment.image(revealBuffer))
-                }
-                if (formattedMsg) {
-                    replyParts.push(`\n\n${formattedMsg}`)
-                }
+                if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+                if (formattedMsg) replyParts.push(`\n\n${formattedMsg}`)
                 await e.reply(replyParts)
             } else if (game.isIconMode) {
                 await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
@@ -1973,10 +1950,10 @@ export class Guess extends plugin {
                 }
             }
             games.delete(groupId)
-            return true
+            return true  // ★ 独占
         } else {
             await e.reply('不对哦，再想想~')
-            return true
+            return true  // ★ 独占
         }
     }
 
@@ -2097,7 +2074,7 @@ export class Guess extends plugin {
             return false
         }
 
-        // ★ 碎碎冰模式：使用不规则合成图
+        // ★ 碎碎冰模式
         if (puzzleGames.has(groupId)) {
             const puzzleState = puzzleGames.get(groupId)
             if (!puzzleState) {
@@ -2111,9 +2088,7 @@ export class Guess extends plugin {
                 logger?.error('[碎碎冰] 生成揭晓图失败', err)
             }
             let replyParts = [`答案是：${puzzleState.name}`]
-            if (revealBuffer) {
-                replyParts.push(segment.image(revealBuffer))
-            }
+            if (revealBuffer) replyParts.push(segment.image(revealBuffer))
             await e.reply(replyParts)
             cleanPuzzleGame(groupId)
             return true
@@ -2128,21 +2103,15 @@ export class Guess extends plugin {
         if (game.mode === 'birthday' && game.year) {
             const msg = getBirthdayMessage(game.name, game.year)
             const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
-
             let revealBuffer = null
             try {
                 revealBuffer = await renderReveal(game)
             } catch (err) {
                 logger?.error('[猜生日贺图] 生成揭晓图失败', err)
             }
-
             let replyParts = [`答案是：\n${game.year}年 『${game.name}』 生日贺图`]
-            if (revealBuffer) {
-                replyParts.push(segment.image(revealBuffer))
-            }
-            if (formattedMsg) {
-                replyParts.push(`\n\n${formattedMsg}`)
-            }
+            if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+            if (formattedMsg) replyParts.push(`\n\n${formattedMsg}`)
             await e.reply(replyParts)
             games.delete(groupId)
             return true
