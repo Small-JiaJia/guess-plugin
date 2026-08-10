@@ -41,7 +41,6 @@ let msgLoading = false
 const puzzleGames = new Map()                 // groupId → puzzleState
 
 // ---------- 加载角色别名数据 ----------
-// 从 roleId.js 中提取所有角色主名和别名，建立映射
 async function loadRoleData() {
     if (roleNames && aliasMap) return { roleNames, aliasMap }
     if (roleLoading) {
@@ -81,7 +80,6 @@ async function loadRoleData() {
 }
 
 // ---------- 加载生日贺语数据 ----------
-// 使用 fs.readFileSync 直接读取 JSON 文件（避免 ESM import 属性问题）
 async function loadBirthdayMessages() {
     if (birthdayMessages) return birthdayMessages
     if (msgLoading) {
@@ -103,10 +101,8 @@ async function loadBirthdayMessages() {
 }
 
 // ---------- 工具函数 ----------
-// 从数组中随机取一项
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 
-// Fisher–Yates 洗牌算法，用于打乱顺序
 function shuffleArray(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -116,7 +112,6 @@ function shuffleArray(arr) {
 }
 
 // ---------- 从 data.json 读取角色信息 ----------
-// 每个角色目录下的 data.json 包含角色详细信息
 function readDataJson(name) {
     const jsonPath = path.join(GENSHIN_CHARACTER_DIR, name, 'data.json')
     if (!fs.existsSync(jsonPath)) return null
@@ -128,13 +123,11 @@ function readDataJson(name) {
     }
 }
 
-// 获取角色的额外数据（元素、武器、所属、地区、料理等）
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
     const roleInfo = REGION_MAP[name] || {}
 
-    // 武器类型英文→中文映射
     const weaponMap = {
         'sword': '单手剑',
         'claymore': '双手剑',
@@ -142,7 +135,6 @@ function getExtraData(name) {
         'bow': '弓',
         'catalyst': '法器'
     }
-    // 元素属性英文→中文映射
     const elementMap = {
         'pyro': '火',
         'hydro': '水',
@@ -169,12 +161,10 @@ function getExtraData(name) {
 }
 
 // ---------- 获取生日贺语 ----------
-// 根据角色名和年份从 birthdayMessages 中查找对应贺语
 function getBirthdayMessage(name, year) {
     if (!birthdayMessages) return null
     const msgs = birthdayMessages[name] || {}
     if (msgs[year]) return msgs[year]
-    // 若无该年份，则取最近年份（小于等于当前年份）
     const years = Object.keys(msgs).map(Number).sort((a, b) => b - a)
     for (const y of years) {
         if (y <= year) return msgs[y]
@@ -183,7 +173,6 @@ function getBirthdayMessage(name, year) {
 }
 
 // ---------- 获取生日完整日期 ----------
-// 从 data.json 的 birth 字段提取月日，格式化为 "X月Y日"
 function getBirthDateString(json) {
     if (!json || !json.birth) return null
     const parts = json.birth.split('-')
@@ -192,7 +181,6 @@ function getBirthDateString(json) {
 }
 
 // ---------- 格式化贺语 ----------
-// 将贺语中的 <br> 替换为换行符 \n
 function formatBirthdayMessage(msg) {
     if (!msg) return null
     return msg.replace(/<br>/g, '\n').trim()
@@ -522,8 +510,6 @@ async function renderPuzzleReveal(puzzleState) {
 }
 
 // ---------- ★ 图片路径获取（支持默认和特殊立绘随机） ----------
-// 普通模式（头像/立绘/角色等）支持随机选择默认或特殊立绘
-// 特殊立绘命名规则：face2.webp、side2.webp、splash2.webp
 function getImagePath(mode, name, fixedPath = null) {
     if (fixedPath) {
         if (fs.existsSync(fixedPath)) return fixedPath
@@ -589,7 +575,6 @@ function getImagePath(mode, name, fixedPath = null) {
 }
 
 // ---------- 检查图片是否存在 ----------
-// 判断角色是否有对应模式的图片（用于筛选可用角色）
 function checkImageExists(mode, name) {
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
@@ -633,8 +618,7 @@ function checkImageExists(mode, name) {
     return false
 }
 
-// ---------- 获取固定图标路径（用于命座/天赋/料理/生日） ----------
-// 游戏开始时固定图片路径，后续提示不再更改
+// ---------- 获取固定图标路径 ----------
 function getFixedIconPath(mode, name) {
     if (mode === 'birthday') {
         const img = getRandomBirthdayImage(name)
@@ -660,7 +644,6 @@ function getFixedIconPath(mode, name) {
 }
 
 // ---------- 生日贺图辅助函数 ----------
-// 检查角色是否有生日贺图
 function hasBirthdayImages(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return false
@@ -668,7 +651,6 @@ function hasBirthdayImages(name) {
     return files.some(f => /^Birthday-\d+\.(webp|png|jpg|jpeg)$/i.test(f))
 }
 
-// 随机获取一张生日贺图路径和年份
 function getRandomBirthdayImage(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return null
@@ -680,7 +662,6 @@ function getRandomBirthdayImage(name) {
     return { filePath: path.join(dir, selected), year }
 }
 
-// 根据角色名和年份获取对应的生日贺图路径
 function getBirthdayImagePath(name, year) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     const exts = ['.webp', '.png', '.jpg', '.jpeg']
@@ -691,11 +672,10 @@ function getBirthdayImagePath(name, year) {
     return null
 }
 // ---------- ★ 清理碎碎冰游戏状态 ----------
-// 游戏结束时释放碎片 buffer，帮助 GC 回收内存
 function cleanPuzzleGame(groupId) {
     if (puzzleGames.has(groupId)) {
         const pState = puzzleGames.get(groupId)
-        // ★ 手动解除碎片 buffer 引用，帮助 GC 回收
+        // 手动解除碎片 buffer 引用，帮助 GC 回收
         if (pState && pState.fragments) {
             pState.fragments = null
         }
@@ -704,16 +684,26 @@ function cleanPuzzleGame(groupId) {
     if (games.has(groupId)) {
         games.delete(groupId)
     }
-    // ★ 主动触发 GC（需要 Node 启动时加 --expose-gc）
+    // 主动触发 GC（需要 Node 启动时加 --expose-gc）
     if (global.gc) {
         global.gc()
     }
 }
 
-// ---------- 图像生成核心 ----------
-// 根据游戏模式生成图片（裁剪图或拼图状态）
+// ---------- 图像生成核心（修复sharp色彩空间错误） ----------
 async function generateCrop(game) {
     const { mode, name, iconPath, imgPath } = game
+
+    // 命座/天赋/料理模式：直接使用固定图片（不裁剪）
+    if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard' ||
+        mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard' ||
+        mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
+        if (!iconPath || !fs.existsSync(iconPath)) {
+            throw new Error(`图片不存在: ${name}`)
+        }
+        const image = sharp(iconPath)
+        return await image.webp({ quality: 90 }).toBuffer()
+    }
 
     // ★ 碎碎冰模式：返回当前拼图状态
     if (mode === 'puzzle') {
@@ -728,25 +718,25 @@ async function generateCrop(game) {
         )
     }
 
-    // 命座/天赋/料理模式：直接使用固定图片（不裁剪）
-    if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard' ||
-        mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard' ||
-        mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
-        if (!iconPath || !fs.existsSync(iconPath)) {
-            throw new Error(`图片不存在: ${name}`)
-        }
-        const image = sharp(iconPath)
-        return await image.webp({ quality: 90 }).toBuffer()
-    }
-
     // 普通模式（头像/立绘/角色/生日贺图）：裁剪局部
     let filePath = imgPath || iconPath
     if (!filePath) throw new Error(`图片不存在: ${name}`)
 
-    // ★ 修复 sharp 色彩空间错误：统一转换为 sRGB
-    let image = sharp(filePath).toColourspace('srgb')
-    const metadata = await image.metadata()
+    let image = sharp(filePath)
+
+    // ★ 先获取图片元数据（带错误兜底）
+    let metadata
+    try {
+        metadata = await image.metadata()
+    } catch (metaErr) {
+        logger?.warn(`[猜角色] 获取图片元数据失败，尝试 PNG 中转: ${metaErr.message}`)
+        const pngBuffer = await image.png().toBuffer()
+        metadata = await sharp(pngBuffer).metadata()
+        image = sharp(pngBuffer)
+    }
+
     const w = metadata.width, h = metadata.height
+    if (!w || !h) throw new Error('图片尺寸无效')
 
     // 初始化裁剪参数
     if (!game.cropSide) {
@@ -827,8 +817,28 @@ async function generateCrop(game) {
                 candidates.push({ x, y })
             }
 
-            const { data, info } = await image.clone().raw().toBuffer({ resolveWithObject: true })
-            const channels = info.channels
+            // ★ 获取 raw 数据（带色彩空间转换和错误兜底）
+            let rawData, rawInfo
+            try {
+                const result = await image.clone()
+                    .toColorspace('srgb')
+                    .raw()
+                    .toBuffer({ resolveWithObject: true })
+                rawData = result.data
+                rawInfo = result.info
+            } catch (rawErr) {
+                logger?.warn(`[猜角色] raw 转换失败，尝试 PNG 中转: ${rawErr.message}`)
+                const pngBuffer = await image.clone().png().toBuffer()
+                const result = await sharp(pngBuffer)
+                    .toColorspace('srgb')
+                    .raw()
+                    .toBuffer({ resolveWithObject: true })
+                rawData = result.data
+                rawInfo = result.info
+            }
+
+            const channels = rawInfo.channels
+            if (!channels) throw new Error('无法获取图片通道数')
 
             let bestScore = -Infinity
             let bestPos = { x: 0, y: 0 }
@@ -841,6 +851,7 @@ async function generateCrop(game) {
             const scores = []
             let varianceScores = []
 
+            // ---- 遍历候选，计算评分 ----
             for (const cand of candidates) {
                 const cx = cand.x, cy = cand.y
 
@@ -856,17 +867,17 @@ async function generateCrop(game) {
                         const px = cx + dx, py = cy + dy
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
-                        const alpha = data[idx + 3]
+                        const alpha = rawData[idx + 3]
                         if (alpha < 128) continue  // 跳过透明像素
 
-                        const r = data[idx] / 255
-                        const g = data[idx + 1] / 255
-                        const b = data[idx + 2] / 255
+                        const r = rawData[idx] / 255
+                        const g = rawData[idx + 1] / 255
+                        const b = rawData[idx + 2] / 255
                         const lum = r * 0.299 + g * 0.587 + b * 0.114
 
-                        sumR += data[idx]
-                        sumG += data[idx + 1]
-                        sumB += data[idx + 2]
+                        sumR += rawData[idx]
+                        sumG += rawData[idx + 1]
+                        sumB += rawData[idx + 2]
                         count++
                         luminances.push(lum)
                         if (lum < lumMin) lumMin = lum
@@ -904,10 +915,10 @@ async function generateCrop(game) {
                         const px = cx + dx, py = cy + dy
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
-                        if (data[idx + 3] < 128) continue
-                        const dr = data[idx] - avgR
-                        const dg = data[idx + 1] - avgG
-                        const db = data[idx + 2] - avgB
+                        if (rawData[idx + 3] < 128) continue
+                        const dr = rawData[idx] - avgR
+                        const dg = rawData[idx + 1] - avgG
+                        const db = rawData[idx + 2] - avgB
                         varR += dr * dr
                         varG += dg * dg
                         varB += db * db
@@ -1043,7 +1054,7 @@ async function generateCrop(game) {
         game.shownBounds.push(currentBounds)
     }
 
-    // 执行裁剪
+    // 执行裁剪并生成输出
     let pipeline = image.extract({
         left: game.cropX,
         top: game.cropY,
@@ -1051,21 +1062,16 @@ async function generateCrop(game) {
         height: game.cropSide
     }).resize(360, 360, { fit: 'fill' })
 
-    // 困难/地狱模式应用滤镜
     if (mode === 'hard') {
         pipeline = pipeline.grayscale()
     } else if (mode === 'hell') {
         pipeline = pipeline.negate()
     }
 
-    // ★ 修复 sharp 色彩空间错误：确保输出前色彩空间为 sRGB
-    pipeline = pipeline.toColourspace('srgb')
-
     return await pipeline.webp({ quality: 90 }).toBuffer()
 }
 
 // ---------- 扩大裁剪区域（用于普通模式提示） ----------
-// 每次提示将裁剪框扩大 1.5 倍，直到覆盖全图
 function enlargeCrop(game) {
     const { imageWidth, imageHeight, cropX, cropY, cropSide } = game
     const minSide = Math.min(imageWidth, imageHeight)
@@ -1095,11 +1101,11 @@ function enlargeCrop(game) {
         game.shownBounds.push(newBounds)
     }
 
-    return newSide >= minSide  // 是否已全覆盖
+    return newSide >= minSide
 }
 
-// ---------- 生成揭晓合成图 ----------
-// 裁剪区域保持原色，其余部分变暗并加红框
+// ---------- 普通揭晓合成图（矩形区域） ----------
+// 已修复 sharp 色彩空间错误
 async function renderReveal(game) {
     let filePath
     if (game.mode === 'birthday') {
@@ -1112,11 +1118,34 @@ async function renderReveal(game) {
         if (!filePath || !fs.existsSync(filePath)) throw new Error('原图不存在')
     }
 
-    const image = sharp(filePath)
-    const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true })
-    const width = info.width
-    const height = info.height
-    const channels = info.channels
+    let image = sharp(filePath)
+
+    // ★ 获取 raw 数据（带色彩空间转换和错误兜底）
+    let rawData, rawInfo
+    try {
+        const result = await image
+            .toColorspace('srgb')
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true })
+        rawData = result.data
+        rawInfo = result.info
+    } catch (rawErr) {
+        logger?.warn(`[猜角色] renderReveal raw 转换失败，尝试 PNG 中转: ${rawErr.message}`)
+        const pngBuffer = await image.clone().png().toBuffer()
+        const result = await sharp(pngBuffer)
+            .toColorspace('srgb')
+            .ensureAlpha()
+            .raw()
+            .toBuffer({ resolveWithObject: true })
+        rawData = result.data
+        rawInfo = result.info
+    }
+
+    const width = rawInfo.width
+    const height = rawInfo.height
+    const channels = rawInfo.channels
+    if (!channels) throw new Error('无法获取图片通道数')
 
     const shownBounds = game.shownBounds || []
 
@@ -1133,9 +1162,9 @@ async function renderReveal(game) {
                 }
             }
             if (!visible) {
-                data[idx] = Math.round(data[idx] * 0.3)
-                data[idx + 1] = Math.round(data[idx + 1] * 0.3)
-                data[idx + 2] = Math.round(data[idx + 2] * 0.3)
+                rawData[idx] = Math.round(rawData[idx] * 0.3)
+                rawData[idx + 1] = Math.round(rawData[idx + 1] * 0.3)
+                rawData[idx + 2] = Math.round(rawData[idx + 2] * 0.3)
             }
         }
     }
@@ -1148,19 +1177,19 @@ async function renderReveal(game) {
         const y2 = bounds.top + bounds.height - 1
         for (let x = x1; x <= x2; x++) {
             const idx = (y1 * width + x) * channels
-            data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
+            rawData[idx] = 255; rawData[idx+1] = 0; rawData[idx+2] = 0; rawData[idx+3] = 255
             const idx2 = (y2 * width + x) * channels
-            data[idx2] = 255; data[idx2+1] = 0; data[idx2+2] = 0; data[idx2+3] = 255
+            rawData[idx2] = 255; rawData[idx2+1] = 0; rawData[idx2+2] = 0; rawData[idx2+3] = 255
         }
         for (let y = y1; y <= y2; y++) {
             const idx = (y * width + x1) * channels
-            data[idx] = 255; data[idx+1] = 0; data[idx+2] = 0; data[idx+3] = 255
+            rawData[idx] = 255; rawData[idx+1] = 0; rawData[idx+2] = 0; rawData[idx+3] = 255
             const idx2 = (y * width + x2) * channels
-            data[idx2] = 255; data[idx2+1] = 0; data[idx2+2] = 0; data[idx2+3] = 255
+            rawData[idx2] = 255; rawData[idx2+1] = 0; rawData[idx2+2] = 0; rawData[idx2+3] = 255
         }
     }
 
-    return sharp(data, { raw: { width, height, channels } })
+    return sharp(rawData, { raw: { width, height, channels } })
         .webp({ quality: 90 })
         .toBuffer()
 }
