@@ -41,6 +41,7 @@ let msgLoading = false
 const puzzleGames = new Map()                 // groupId → puzzleState
 
 // ---------- 加载角色别名数据 ----------
+// 从 roleId.js 中提取所有角色主名和别名，建立映射
 async function loadRoleData() {
     if (roleNames && aliasMap) return { roleNames, aliasMap }
     if (roleLoading) {
@@ -80,6 +81,7 @@ async function loadRoleData() {
 }
 
 // ---------- 加载生日贺语数据 ----------
+// 使用 fs.readFileSync 直接读取 JSON 文件（避免 ESM import 属性问题）
 async function loadBirthdayMessages() {
     if (birthdayMessages) return birthdayMessages
     if (msgLoading) {
@@ -101,8 +103,10 @@ async function loadBirthdayMessages() {
 }
 
 // ---------- 工具函数 ----------
+// 从数组中随机取一项
 function randomItem(arr) { return arr[Math.floor(Math.random() * arr.length)] }
 
+// Fisher–Yates 洗牌算法，用于打乱顺序
 function shuffleArray(arr) {
     for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -112,6 +116,7 @@ function shuffleArray(arr) {
 }
 
 // ---------- 从 data.json 读取角色信息 ----------
+// 每个角色目录下的 data.json 包含角色详细信息
 function readDataJson(name) {
     const jsonPath = path.join(GENSHIN_CHARACTER_DIR, name, 'data.json')
     if (!fs.existsSync(jsonPath)) return null
@@ -123,11 +128,13 @@ function readDataJson(name) {
     }
 }
 
+// 获取角色的额外数据（元素、武器、所属、地区、料理等）
 function getExtraData(name) {
     const json = readDataJson(name)
     if (!json) return null
     const roleInfo = REGION_MAP[name] || {}
 
+    // 武器类型英文→中文映射
     const weaponMap = {
         'sword': '单手剑',
         'claymore': '双手剑',
@@ -135,6 +142,7 @@ function getExtraData(name) {
         'bow': '弓',
         'catalyst': '法器'
     }
+    // 元素属性英文→中文映射
     const elementMap = {
         'pyro': '火',
         'hydro': '水',
@@ -161,10 +169,12 @@ function getExtraData(name) {
 }
 
 // ---------- 获取生日贺语 ----------
+// 根据角色名和年份从 birthdayMessages 中查找对应贺语
 function getBirthdayMessage(name, year) {
     if (!birthdayMessages) return null
     const msgs = birthdayMessages[name] || {}
     if (msgs[year]) return msgs[year]
+    // 若无该年份，则取最近年份（小于等于当前年份）
     const years = Object.keys(msgs).map(Number).sort((a, b) => b - a)
     for (const y of years) {
         if (y <= year) return msgs[y]
@@ -173,6 +183,7 @@ function getBirthdayMessage(name, year) {
 }
 
 // ---------- 获取生日完整日期 ----------
+// 从 data.json 的 birth 字段提取月日，格式化为 "X月Y日"
 function getBirthDateString(json) {
     if (!json || !json.birth) return null
     const parts = json.birth.split('-')
@@ -181,6 +192,7 @@ function getBirthDateString(json) {
 }
 
 // ---------- 格式化贺语 ----------
+// 将贺语中的 <br> 替换为换行符 \n
 function formatBirthdayMessage(msg) {
     if (!msg) return null
     return msg.replace(/<br>/g, '\n').trim()
@@ -510,6 +522,8 @@ async function renderPuzzleReveal(puzzleState) {
 }
 
 // ---------- ★ 图片路径获取（支持默认和特殊立绘随机） ----------
+// 普通模式（头像/立绘/角色等）支持随机选择默认或特殊立绘
+// 特殊立绘命名规则：face2.webp、side2.webp、splash2.webp
 function getImagePath(mode, name, fixedPath = null) {
     if (fixedPath) {
         if (fs.existsSync(fixedPath)) return fixedPath
@@ -575,6 +589,7 @@ function getImagePath(mode, name, fixedPath = null) {
 }
 
 // ---------- 检查图片是否存在 ----------
+// 判断角色是否有对应模式的图片（用于筛选可用角色）
 function checkImageExists(mode, name) {
     if (mode === 'food' || mode === 'food_simple' || mode === 'food_hard') {
         const filePath = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'food.webp')
@@ -618,7 +633,8 @@ function checkImageExists(mode, name) {
     return false
 }
 
-// ---------- 获取固定图标路径 ----------
+// ---------- 获取固定图标路径（用于命座/天赋/料理/生日） ----------
+// 游戏开始时固定图片路径，后续提示不再更改
 function getFixedIconPath(mode, name) {
     if (mode === 'birthday') {
         const img = getRandomBirthdayImage(name)
@@ -644,6 +660,7 @@ function getFixedIconPath(mode, name) {
 }
 
 // ---------- 生日贺图辅助函数 ----------
+// 检查角色是否有生日贺图
 function hasBirthdayImages(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return false
@@ -651,6 +668,7 @@ function hasBirthdayImages(name) {
     return files.some(f => /^Birthday-\d+\.(webp|png|jpg|jpeg)$/i.test(f))
 }
 
+// 随机获取一张生日贺图路径和年份
 function getRandomBirthdayImage(name) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     if (!fs.existsSync(dir)) return null
@@ -662,6 +680,7 @@ function getRandomBirthdayImage(name) {
     return { filePath: path.join(dir, selected), year }
 }
 
+// 根据角色名和年份获取对应的生日贺图路径
 function getBirthdayImagePath(name, year) {
     const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
     const exts = ['.webp', '.png', '.jpg', '.jpeg']
@@ -672,6 +691,7 @@ function getBirthdayImagePath(name, year) {
     return null
 }
 // ---------- ★ 清理碎碎冰游戏状态 ----------
+// 游戏结束时释放碎片 buffer，帮助 GC 回收内存
 function cleanPuzzleGame(groupId) {
     if (puzzleGames.has(groupId)) {
         const pState = puzzleGames.get(groupId)
@@ -691,6 +711,7 @@ function cleanPuzzleGame(groupId) {
 }
 
 // ---------- 图像生成核心 ----------
+// 根据游戏模式生成图片（裁剪图或拼图状态）
 async function generateCrop(game) {
     const { mode, name, iconPath, imgPath } = game
 
@@ -722,7 +743,8 @@ async function generateCrop(game) {
     let filePath = imgPath || iconPath
     if (!filePath) throw new Error(`图片不存在: ${name}`)
 
-    let image = sharp(filePath)
+    // ★ 修复 sharp 色彩空间错误：统一转换为 sRGB
+    let image = sharp(filePath).toColourspace('srgb')
     const metadata = await image.metadata()
     const w = metadata.width, h = metadata.height
 
@@ -1021,6 +1043,7 @@ async function generateCrop(game) {
         game.shownBounds.push(currentBounds)
     }
 
+    // 执行裁剪
     let pipeline = image.extract({
         left: game.cropX,
         top: game.cropY,
@@ -1028,16 +1051,21 @@ async function generateCrop(game) {
         height: game.cropSide
     }).resize(360, 360, { fit: 'fill' })
 
+    // 困难/地狱模式应用滤镜
     if (mode === 'hard') {
         pipeline = pipeline.grayscale()
     } else if (mode === 'hell') {
         pipeline = pipeline.negate()
     }
 
+    // ★ 修复 sharp 色彩空间错误：确保输出前色彩空间为 sRGB
+    pipeline = pipeline.toColourspace('srgb')
+
     return await pipeline.webp({ quality: 90 }).toBuffer()
 }
 
 // ---------- 扩大裁剪区域（用于普通模式提示） ----------
+// 每次提示将裁剪框扩大 1.5 倍，直到覆盖全图
 function enlargeCrop(game) {
     const { imageWidth, imageHeight, cropX, cropY, cropSide } = game
     const minSide = Math.min(imageWidth, imageHeight)
@@ -1067,10 +1095,11 @@ function enlargeCrop(game) {
         game.shownBounds.push(newBounds)
     }
 
-    return newSide >= minSide
+    return newSide >= minSide  // 是否已全覆盖
 }
 
-// ---------- 普通揭晓合成图（矩形区域） ----------
+// ---------- 生成揭晓合成图 ----------
+// 裁剪区域保持原色，其余部分变暗并加红框
 async function renderReveal(game) {
     let filePath
     if (game.mode === 'birthday') {
@@ -1091,6 +1120,7 @@ async function renderReveal(game) {
 
     const shownBounds = game.shownBounds || []
 
+    // 遍历像素：裁剪区域保持原色，其余变暗
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const idx = (y * width + x) * channels
@@ -1110,6 +1140,7 @@ async function renderReveal(game) {
         }
     }
 
+    // 为每个历史裁剪区域绘制红框
     for (const bounds of shownBounds) {
         const x1 = bounds.left
         const y1 = bounds.top
