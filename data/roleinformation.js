@@ -30,6 +30,7 @@ export default {
   '法尔伽': { region: '蒙德', specialDish: '北地烟熏鸡' },
   '杜林': { region: '蒙德', specialDish: '课后作业' },
   '塔利雅': { region: '蒙德', specialDish: '欢夜畅谈' },
+  '布伦妮': { region: '蒙德', specialDish: '转盘特调' },
 
   // ==================== 璃月 ====================
   '香菱': { region: '璃月', specialDish: '万民堂水煮鱼' },
@@ -130,7 +131,8 @@ export default {
   '达达利亚': { region: '至冬', specialDish: null },
   '阿蕾奇诺': { region: '至冬', specialDish: null },
   '桑多涅': { region: '至冬', specialDish: '花果三重奏' },
-  '布伦妮': { region: '至冬', specialDish: '转盘特调' },
+  '阿罗夏': { region: '至冬', specialDish: null },
+  '奥黛塔': { region: '至冬', specialDish: null },
 
   // ==================== 其他 ====================
   '旅行者': { region: '其他', specialDish: null },
