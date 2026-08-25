@@ -148,7 +148,6 @@ export async function hint(e) {
 
     // 图标模式
     if (game.isIconMode) {
-        // 防御：确保 hintIndex 和 hintPool 存在
         if (!game.hintPool) game.hintPool = []
         if (game.hintIndex === undefined) game.hintIndex = -1
 
@@ -293,14 +292,20 @@ export async function guess(e) {
         const input = e.msg.trim()
         if (input.startsWith('#')) return false
 
-        // 检查是否匹配别名
+        // 获取别名映射
         const { aliasMap } = await loadRoleData()
         const knownName = aliasMap[input]
-        if (!knownName) return false  // 不是角色名，放行
 
+        // 判断是否正确：比较本名或别名
         const isCorrect = (input === puzzleState.name) || (knownName === puzzleState.name)
 
+        // 如果既不是本名也没有别名，说明不是角色名，放行
+        if (!isCorrect && !knownName) {
+            return false
+        }
+
         if (isCorrect) {
+            // 答对
             let revealBuffer = null
             try {
                 revealBuffer = await renderPuzzleReveal(puzzleState)
@@ -386,9 +391,12 @@ export async function guess(e) {
 
     const { aliasMap } = await loadRoleData()
     const knownName = aliasMap[input]
-    if (!knownName) return false
-
     const isCorrect = (input === game.name) || (knownName === game.name)
+
+    // 如果既不是本名也没有别名，放行
+    if (!isCorrect && !knownName) {
+        return false
+    }
 
     if (isCorrect) {
         if (game.mode === 'birthday' && game.year) {
