@@ -1,10 +1,10 @@
 // ============================================================
 // 模块：碎碎冰拼图 (puzzle)
 // 职责：处理 #碎碎冰猜立绘 和 #碎碎冰猜角色 指令
-// 依赖：core, image
+// 依赖：core, image, sharp
 // ============================================================
-import sharp from 'sharp'
 
+import sharp from 'sharp'
 import {
     games, puzzleGames, recentlyUsed,
     loadRoleData,
@@ -20,7 +20,16 @@ import {
     renderPuzzleReveal
 } from './image.js'
 
+// ---------- 带超时的 Promise 包装 ----------
+function withTimeout(promise, ms = 30000) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('操作超时')), ms))
+    ])
+}
+
 export async function startPuzzle(e) {
+    // 加载角色数据
     const { roleNames: loadedNames } = await loadRoleData()
     if (!loadedNames || loadedNames.length === 0) {
         await e.reply('角色数据加载失败，请检查')
@@ -30,13 +39,14 @@ export async function startPuzzle(e) {
     const groupId = e.group_id
     if (!groupId) return false
 
+    // 清理超时游戏
     cleanTimeout(groupId)
     if (puzzleGames.has(groupId)) {
         await e.reply('当前群已有碎碎冰游戏，请先结束或等待超时')
         return false
     }
 
-    // 解析指令
+    // 解析指令：匹配 #碎碎冰猜立绘 或 #碎碎冰猜角色，可选数量
     const cmdMatch = e.msg.match(/^#碎碎冰猜(立绘|角色)\s*(\d+)?$/)
     if (!cmdMatch) return false
 
@@ -54,10 +64,11 @@ export async function startPuzzle(e) {
         }
     }
 
-    // 自适应斐波那契阈值
+    // 自适应归位阈值（占比 5%、10%、15%、25%、40%）
     const ratios = [0.05, 0.10, 0.15, 0.25, 0.40]
     const mergeThresholds = ratios.map(r => Math.max(3, Math.round(fragmentCount * r)))
 
+    // 冷却过滤
     const now = Date.now()
     const allAvailable = loadedNames.filter(name => checkImageExists(imageMode, name))
     let availableNames = allAvailable.filter(name => {
@@ -75,9 +86,11 @@ export async function startPuzzle(e) {
         return false
     }
 
+    // 随机选角色
     const name = randomItem(availableNames)
     recentlyUsed.set(name, now)
 
+    // 获取角色额外信息（用于提示，但碎碎冰模式暂未使用，保留）
     const extra = getExtraData(name)
     if (!extra) {
         await e.reply(`角色 ${name} 的 data.json 不存在，无法开始游戏`)
@@ -94,24 +107,32 @@ export async function startPuzzle(e) {
     let originalWidth, originalHeight
     try {
         await e.reply(`⏳ 正在生成碎碎冰${modeName}碎片，请稍候…`)
-        const meta = await sharp(imgPath).metadata()
+
+        // 获取图片尺寸（带10秒超时）
+        const meta = await withTimeout(sharp(imgPath).metadata(), 10000)
         originalWidth = meta.width
         originalHeight = meta.height
-        fragments = await generateVoronoiFragments(imgPath, fragmentCount, 0.15)
+
+        // 生成 Voronoi 碎片（带60秒超时，内部也有递归深度限制）
+        fragments = await withTimeout(
+            generateVoronoiFragments(imgPath, fragmentCount, 0.15),
+            60000
+        )
         logger?.info(`[碎碎冰猜${modeName}] 已生成 ${fragments.length} 个碎片`)
     } catch (err) {
         logger?.error(`[碎碎冰猜${modeName}] 生成碎片失败`, err)
-        await e.reply(`生成碎片失败：${err.message}`)
+        await e.reply(`生成碎片失败：${err.message || '未知错误'}`)
         cleanPuzzleGame(groupId)
         return false
     }
 
-    // 初始揭示 2 块
+    // 初始揭示 2 块碎片（随机挑选）
     const shuffled = shuffleArray([...fragments])
     for (let i = 0; i < Math.min(2, shuffled.length); i++) {
         shuffled[i].isRevealed = true
     }
 
+    // 构建碎碎冰游戏状态
     const puzzleState = {
         fragments,
         originalWidth,
@@ -129,6 +150,7 @@ export async function startPuzzle(e) {
 
     puzzleGames.set(groupId, puzzleState)
 
+    // 同时存入普通 games 映射，用于 generateCrop 获取
     const game = {
         mode: 'puzzle',
         name,
@@ -139,7 +161,8 @@ export async function startPuzzle(e) {
     games.set(groupId, game)
 
     try {
-        const buffer = await generateCrop(game)
+        // 渲染初始拼图状态（带30秒超时）
+        const buffer = await withTimeout(generateCrop(game), 30000)
         await e.reply([
             segment.image(buffer),
             `\n🧊 已分割为 ${fragmentCount} 块碎片（${modeName}），初始揭示 2 块（随机位置）\n猜错一次揭示 1 块并累计猜错次数，累计猜错 ${mergeThresholds.join('、')} 次时自动归位\n#提示 可额外揭示 1 块碎片（不消耗猜错次数）`
@@ -147,7 +170,7 @@ export async function startPuzzle(e) {
         logger?.info(`[碎碎冰猜${modeName}] 群${groupId} 开始游戏，角色: ${name}，碎片: ${fragmentCount}块`)
     } catch (err) {
         logger?.error(`[碎碎冰猜${modeName}] 发送初始碎片失败`, err)
-        await e.reply(`发送碎片失败：${err.message}`)
+        await e.reply(`发送碎片失败：${err.message || '未知错误'}`)
         cleanPuzzleGame(groupId)
         return false
     }

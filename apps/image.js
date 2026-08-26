@@ -9,7 +9,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { Delaunay } from 'd3-delaunay'
-import { randomItem, shuffleArray, readDataJson } from './core.js'  // 导入工具函数
+import { randomItem, shuffleArray, readDataJson } from './core.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character')
@@ -177,7 +177,7 @@ export function getBirthdayImagePath(name, year) {
     return null
 }
 
-// ---------- ★ 碎片有效评分函数 ----------
+// ---------- 碎片有效评分函数 ----------
 async function calculateFragmentScore(fragmentBuffer) {
     try {
         const { data, info } = await sharp(fragmentBuffer)
@@ -187,7 +187,7 @@ async function calculateFragmentScore(fragmentBuffer) {
         let sumR = 0, sumG = 0, sumB = 0, count = 0
         for (let i = 0; i < data.length; i += channels) {
             const a = data[i + 3]
-            if (a < 30) continue
+            if (a < 30) continue // 跳过透明像素
             sumR += data[i]
             sumG += data[i + 1]
             sumB += data[i + 2]
@@ -250,12 +250,15 @@ async function generatePolygonMask(points, width, height, offset = { offsetX: 0,
     return await sharp(Buffer.from(svg)).png().toBuffer()
 }
 
-// ---------- ★ Voronoi 碎片生成核心 ----------
-export async function generateVoronoiFragments(imagePath, fragmentCount = 100, minScore = 0.15) {
+// ---------- ★ Voronoi 碎片生成核心（带递归深度限制） ----------
+export async function generateVoronoiFragments(imagePath, fragmentCount = 100, minScore = 0.15, depth = 0) {
+    const MAX_DEPTH = 3 // 防止无限递归
+
     const image = sharp(imagePath)
     const metadata = await image.metadata()
     const { width, height } = metadata
 
+    // 生成随机点（含边界点）
     const points = []
     const margin = 0.05
     const boundaryPoints = [
@@ -276,9 +279,11 @@ export async function generateVoronoiFragments(imagePath, fragmentCount = 100, m
     }
     const allPoints = [...boundaryPoints, ...points]
 
+    // 计算 Delaunay 三角网和 Voronoi 图
     const delaunay = Delaunay.from(allPoints)
     const voronoi = delaunay.voronoi([0, 0, width, height])
 
+    // 提取每个单元格多边形
     const polygons = []
     for (let i = 0; i < allPoints.length; i++) {
         const cell = voronoi.cellPolygon(i)
@@ -294,6 +299,7 @@ export async function generateVoronoiFragments(imagePath, fragmentCount = 100, m
         }
     }
 
+    // 提取每个碎片的图片（使用 Alpha 蒙版）
     const fragments = []
     const originalImage = sharp(imagePath)
 
@@ -338,19 +344,22 @@ export async function generateVoronoiFragments(imagePath, fragmentCount = 100, m
                 randomY: Math.random() * Math.max(0, maxRY) + margin2 / 2,
             })
         } catch (err) {
-            continue
+            continue // 跳过提取失败的碎片
         }
     }
 
+    // 有效像素过滤，如果有效碎片不足且未达到最大递归深度，则降低阈值重试
     const filtered = fragments.filter(f => f.score >= minScore)
-    if (filtered.length < Math.min(fragmentCount * 0.5, fragmentCount - 10)) {
-        const retry = await generateVoronoiFragments(imagePath, fragmentCount, minScore * 0.4)
+    if (filtered.length < Math.min(fragmentCount * 0.5, fragmentCount - 10) && depth < MAX_DEPTH) {
+        const retry = await generateVoronoiFragments(imagePath, fragmentCount, minScore * 0.4, depth + 1)
         return retry
     }
 
+    // 按分数排序，取前 fragmentCount 个
     filtered.sort((a, b) => b.score - a.score)
     const result = filtered.slice(0, fragmentCount)
 
+    // 如果结果仍然不足，补一些随机矩形碎片
     const originalImageForFill = sharp(imagePath)
     while (result.length < fragmentCount) {
         const w = Math.random() * 150 + 40
@@ -380,12 +389,13 @@ export async function generateVoronoiFragments(imagePath, fragmentCount = 100, m
 
     return result
 }
-
 // ---------- ★ 渲染碎碎冰当前状态 ----------
 export async function renderPuzzleState(fragments, originalWidth, originalHeight) {
+    // 只取已揭示的碎片
     const revealed = fragments.filter(f => f.isRevealed)
 
     if (revealed.length === 0) {
+        // 如果没有揭示任何碎片，返回全黑背景
         return await sharp({
             create: {
                 width: originalWidth,
@@ -396,6 +406,7 @@ export async function renderPuzzleState(fragments, originalWidth, originalHeight
         }).webp({ quality: 85 }).toBuffer()
     }
 
+    // 构建合成图层：已揭示的碎片按位置或随机位置放置
     const layers = []
     for (const frag of revealed) {
         const posX = frag.isPlaced ? frag.rect.x : frag.randomX
@@ -407,6 +418,7 @@ export async function renderPuzzleState(fragments, originalWidth, originalHeight
         })
     }
 
+    // 在黑色背景上合成所有碎片
     return await sharp({
         create: {
             width: originalWidth,
@@ -420,7 +432,7 @@ export async function renderPuzzleState(fragments, originalWidth, originalHeight
         .toBuffer()
 }
 
-// ---------- ★ 碎碎冰揭晓合成图 ----------
+// ---------- ★ 碎碎冰揭晓合成图（保留不规则形状） ----------
 export async function renderPuzzleReveal(puzzleState) {
     const { imgPath, fragments, originalWidth, originalHeight } = puzzleState
     const revealed = fragments.filter(f => f.isRevealed)
@@ -436,10 +448,12 @@ export async function renderPuzzleReveal(puzzleState) {
         }).webp({ quality: 85 }).toBuffer()
     }
 
+    // 读取原图并整体暗化（作为背景）
     const image = sharp(imgPath)
     const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true })
     const width = info.width, height = info.height, channels = info.channels
 
+    // 将每个像素的亮度降低到 30%
     for (let i = 0; i < data.length; i += channels) {
         data[i] = Math.round(data[i] * 0.3)
         data[i + 1] = Math.round(data[i + 1] * 0.3)
@@ -450,6 +464,7 @@ export async function renderPuzzleReveal(puzzleState) {
         .webp({ quality: 85 })
         .toBuffer()
 
+    // 叠加已揭示碎片（正确位置）
     const layers = revealed.map(frag => ({
         input: frag.buffer,
         left: frag.rect.x,
@@ -465,7 +480,7 @@ export async function renderPuzzleReveal(puzzleState) {
         .toBuffer()
 }
 
-// ---------- 图像生成核心（裁剪） ----------
+// ---------- 图像生成核心（裁剪 / 拼图） ----------
 export async function generateCrop(game) {
     const { mode, name, iconPath, imgPath } = game
 
@@ -480,12 +495,9 @@ export async function generateCrop(game) {
         return await image.webp({ quality: 90 }).toBuffer()
     }
 
-    // 碎碎冰模式：返回当前拼图状态
+    // ★ 碎碎冰模式：返回当前拼图状态
     if (mode === 'puzzle') {
-        // puzzleGames 在外部引入，但该函数不直接依赖，由调用方传入 game 中已包含所需状态？
-        // 注意：原代码中 generateCrop 从 puzzleGames.get(game.groupId) 获取状态，但这里我们需导入 puzzleGames
-        // 为避免循环依赖，我们将在调用时传递 puzzleState 或通过 game 引用，但这里沿用原逻辑，需要导入 core 中的 puzzleGames
-        // 但为了解耦，我们可以在外部处理，但暂时保持原样，引入 core 的 puzzleGames
+        // 从 puzzleGames 获取状态（避免循环依赖，直接在函数内导入）
         const { puzzleGames } = await import('./core.js')
         const puzzleState = puzzleGames.get(game.groupId)
         if (!puzzleState) {
@@ -504,6 +516,7 @@ export async function generateCrop(game) {
 
     let image = sharp(filePath)
 
+    // 获取元数据，若失败则尝试 PNG 中转
     let metadata
     try {
         metadata = await image.metadata()
@@ -517,20 +530,21 @@ export async function generateCrop(game) {
     const w = metadata.width, h = metadata.height
     if (!w || !h) throw new Error('图片尺寸无效')
 
-    // 初始化裁剪参数
+    // 初始化裁剪参数（如果尚未初始化）
     if (!game.cropSide) {
         const shortSide = Math.min(w, h)
         let ratio = 0.25
         if (mode === 'splash' || mode === 'birthday') {
-            ratio = 0.10
+            ratio = 0.10   // 立绘和生日贺图使用更小裁剪
         }
         const side = Math.max(50, Math.round(shortSide * ratio))
 
-        // 智能裁剪（仅立绘/生日）
+        // 智能裁剪：立绘和生日贺图使用内容感知算法
         if (mode === 'splash' || mode === 'birthday') {
             const isBirthday = (mode === 'birthday')
             const cornerMargin = isBirthday ? 0.15 : 0.0
 
+            // ---- 候选生成（带距离约束和四角排除） ----
             const minDistance = Math.max(30, side * 1.2)
             let candidates = []
             let attempts = 0
@@ -575,6 +589,7 @@ export async function generateCrop(game) {
                 }
             }
 
+            // 候选不足时补随机
             while (candidates.length < 10) {
                 const maxX = w - side
                 const maxY = h - side
@@ -594,6 +609,7 @@ export async function generateCrop(game) {
                 candidates.push({ x, y })
             }
 
+            // 获取 raw 数据用于评分
             let rawData, rawInfo
             try {
                 const result = await image.clone()
@@ -627,6 +643,7 @@ export async function generateCrop(game) {
             const scores = []
             let varianceScores = []
 
+            // ---- 遍历候选，计算评分 ----
             for (const cand of candidates) {
                 const cx = cand.x, cy = cand.y
 
@@ -643,7 +660,7 @@ export async function generateCrop(game) {
                         if (px >= w || py >= h) continue
                         const idx = (py * w + px) * channels
                         const alpha = rawData[idx + 3]
-                        if (alpha < 128) continue
+                        if (alpha < 128) continue  // 跳过透明像素
 
                         const r = rawData[idx] / 255
                         const g = rawData[idx + 1] / 255
@@ -658,6 +675,7 @@ export async function generateCrop(game) {
                         if (lum < lumMin) lumMin = lum
                         if (lum > lumMax) lumMax = lum
 
+                        // 色相分组（12个bin）
                         const max = Math.max(r, g, b)
                         const min = Math.min(r, g, b)
                         if (max !== min) {
@@ -669,6 +687,7 @@ export async function generateCrop(game) {
                             hueSet.add(hueBin)
                         }
 
+                        // 饱和度（HSV 中的 S 通道）
                         const maxRGB = Math.max(r, g, b)
                         const minRGB = Math.min(r, g, b)
                         const s = (maxRGB === 0) ? 0 : (1 - minRGB / maxRGB)
@@ -680,6 +699,7 @@ export async function generateCrop(game) {
 
                 if (count < side * side * 0.3) continue
 
+                // 颜色方差
                 const avgR = sumR / count, avgG = sumG / count, avgB = sumB / count
                 let varR = 0, varG = 0, varB = 0
                 for (let dy = 0; dy < side; dy++) {
@@ -699,6 +719,7 @@ export async function generateCrop(game) {
                 const varianceScore = varR + varG + varB
                 varianceScores.push(varianceScore)
 
+                // 纹理（亮度标准差）
                 const meanLum = luminances.reduce((a, b) => a + b, 0) / luminances.length
                 let varLum = 0
                 for (const lum of luminances) {
@@ -706,6 +727,7 @@ export async function generateCrop(game) {
                 }
                 const textureScore = Math.sqrt(varLum / luminances.length) / 255
 
+                // 中心贴近度
                 const regionCenterX = cx + side / 2
                 const regionCenterY = cy + side / 2
                 const distToCenter = Math.sqrt(
@@ -714,12 +736,16 @@ export async function generateCrop(game) {
                 )
                 const centerScore = 1 - (distToCenter / maxDist)
 
+                // 色相多样度
                 const hueDiversity = Math.min(hueSet.size / 12, 1.0)
+                // 亮度对比度
                 const contrastScore = Math.min((lumMax - lumMin), 1.0)
+                // 饱和度方差
                 const meanS = sumS / sCount
                 const varS = sumS2 / sCount - meanS * meanS
                 const satStd = Math.sqrt(Math.max(varS, 0))
 
+                // 边缘惩罚（仅左/右/上，跳过底部）
                 const distToLeft = regionCenterX
                 const distToRight = w - regionCenterX
                 const distToTop = regionCenterY
@@ -741,6 +767,7 @@ export async function generateCrop(game) {
                 })
             }
 
+            // 归一化并计算最终得分
             if (varianceScores.length === 0) {
                 const maxX = w - side, maxY = h - side
                 game.cropX = Math.round(Math.random() * Math.max(0, maxX))
@@ -761,6 +788,7 @@ export async function generateCrop(game) {
 
                     let combinedScore
                     if (mode === 'birthday') {
+                        // 生日贺图专用权重
                         combinedScore =
                             normSat * 0.28 +
                             item.contrastScore * 0.28 +
@@ -769,6 +797,7 @@ export async function generateCrop(game) {
                             item.textureScore * 0.10 -
                             item.edgePenalty * 0.10
                     } else {
+                        // 立绘模式（splash）
                         combinedScore =
                             item.textureScore * 0.35 +
                             normVariance * 0.25 +
@@ -787,6 +816,7 @@ export async function generateCrop(game) {
                 game.cropY = bestPos.y
             }
         } else {
+            // 其他模式：纯随机
             const maxX = w - side, maxY = h - side
             game.cropX = Math.round(Math.random() * Math.max(0, maxX))
             game.cropY = Math.round(Math.random() * Math.max(0, maxY))
@@ -816,6 +846,7 @@ export async function generateCrop(game) {
         game.shownBounds.push(currentBounds)
     }
 
+    // 执行裁剪并生成输出
     let pipeline = image.extract({
         left: game.cropX,
         top: game.cropY,
@@ -865,7 +896,7 @@ export function enlargeCrop(game) {
     return newSide >= minSide
 }
 
-// ---------- 普通揭晓合成图 ----------
+// ---------- 普通揭晓合成图（矩形区域） ----------
 export async function renderReveal(game) {
     let filePath
     if (game.mode === 'birthday') {
@@ -880,6 +911,7 @@ export async function renderReveal(game) {
 
     let image = sharp(filePath)
 
+    // 获取 raw 数据
     let rawData, rawInfo
     try {
         const result = await image
@@ -908,6 +940,7 @@ export async function renderReveal(game) {
 
     const shownBounds = game.shownBounds || []
 
+    // 遍历像素：裁剪区域保持原色，其余变暗
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const idx = (y * width + x) * channels
@@ -927,6 +960,7 @@ export async function renderReveal(game) {
         }
     }
 
+    // 为每个历史裁剪区域绘制红框
     for (const bounds of shownBounds) {
         const x1 = bounds.left
         const y1 = bounds.top
