@@ -10,6 +10,7 @@ import * as birthday from './birthday.js'
 import * as icon from './icon.js'
 import * as puzzle from './puzzle.js'
 import * as common from './common.js'
+import * as pixel from './pixel.js'
 import { loadRoleData, loadBirthdayMessages } from './core.js'
 
 export default class Guess extends plugin {
@@ -26,6 +27,7 @@ export default class Guess extends plugin {
                 { reg: '^#料理猜角色(简单|普通|困难)?$', fnc: 'startIconFood' },
                 { reg: '^#猜生日贺图$', fnc: 'startBirthday' },
                 { reg: '^#碎碎冰猜(立绘|角色)\\s*(\\d+)?$', fnc: 'startPuzzle' },
+                { reg: '^#像素猜角色$', fnc: 'startPixelGame' },
                 { reg: '^#猜(头像(?:侧脸)?|角色(?:困难|地狱|小名片|名片)?|立绘)$', fnc: 'guessCommand' },
                 { reg: '^#提示$', fnc: 'hint' },
                 { reg: '^#看答案$', fnc: 'reveal' },
@@ -63,8 +65,8 @@ export default class Guess extends plugin {
             const difficulty = match?.[1] || '普通'
             return icon.startIconGame(e, 'food', difficulty, '料理')
         }
-
         this.startPuzzle = puzzle.startPuzzle
+        this.startPixelGame = pixel.startPixelGame
     }
 
     async loadData() {

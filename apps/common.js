@@ -1,7 +1,7 @@
 // ============================================================
 // 模块：公共指令 (common)
 // 职责：处理 guess、hint、reveal、endGame、help 等公共功能
-// 依赖：core, image, icon（用于 buildHintMessage）
+// 依赖：core, image, icon, pixel
 // ============================================================
 
 import {
@@ -17,7 +17,8 @@ import {
     renderReveal,
     renderPuzzleReveal
 } from './image.js'
-import { buildHintMessage } from './icon.js'   // 用于图标模式提示
+import { buildHintMessage } from './icon.js'
+import { handlePixelHint, renderPixelReveal } from './pixel.js'   // 像素模式相关
 
 // ---------- 帮助指令 ----------
 export async function help(e) {
@@ -29,6 +30,7 @@ export async function help(e) {
   #猜头像侧脸      - 仅显示角色侧脸头像局部
   #猜角色          - 显示抽卡立绘图局部（无滤镜）
   #猜立绘          - 显示全身立绘图局部（无滤镜）
+  #像素猜角色      - 立绘转 8x8 像素马赛克（#提示 可提升分辨率 8→12→16→24→32）
   #碎碎冰猜立绘    - 立绘被打碎成不规则碎片（默认100块）
   #碎碎冰猜角色    - 抽卡立绘被打碎成不规则碎片（默认100块）
   #碎碎冰猜立绘 120 - 指定碎片数量（20~200块）
@@ -61,7 +63,7 @@ export async function help(e) {
   - 答对或看答案时显示不规则碎片合成图
 
 【游戏进行】
-  #提示            - 扩大显示区域 / 刷新视角（生日模式）/ 碎碎冰模式揭示碎片
+  #提示            - 扩大显示区域 / 提升分辨率（像素模式）/ 揭示碎片（碎碎冰）
   #看答案          - 揭晓答案
   #结束            - 结束当前游戏
 
@@ -142,6 +144,22 @@ export async function hint(e) {
         } catch (err) {
             logger?.error('[猜生日贺图] 重裁失败', err)
             await e.reply(`重裁失败：${err.message}`)
+        }
+        return true
+    }
+
+    // ★ 像素模式：逐步提升分辨率 8→12→16→24→32
+    if (game.isPixelMode) {
+        try {
+            const { buffer, message } = await handlePixelHint(game, groupId)
+            if (buffer) {
+                await e.reply([segment.image(buffer), '\n' + message])
+            } else {
+                await e.reply(message)
+            }
+        } catch (err) {
+            logger?.error('[像素猜角色] 提示失败', err)
+            await e.reply(`提示失败：${err.message}`)
         }
         return true
     }
@@ -246,6 +264,21 @@ export async function reveal(e) {
         return true
     }
 
+    // ★ 像素模式：显示答案 + 原图
+    if (game.isPixelMode) {
+        let originalBuffer = null
+        try {
+            originalBuffer = await renderPixelReveal(game)
+        } catch (err) {
+            logger?.error('[像素猜角色] 生成原图失败', err)
+        }
+        let replyParts = [`答案是：${game.name}`]
+        if (originalBuffer) replyParts.push(segment.image(originalBuffer))
+        await e.reply(replyParts)
+        games.delete(groupId)
+        return true
+    }
+
     try {
         const revealBuffer = await renderReveal(game)
         await e.reply([`答案是：${game.name}`, segment.image(revealBuffer)])
@@ -292,20 +325,13 @@ export async function guess(e) {
         const input = e.msg.trim()
         if (input.startsWith('#')) return false
 
-        // 获取别名映射
         const { aliasMap } = await loadRoleData()
         const knownName = aliasMap[input]
-
-        // 判断是否正确：比较本名或别名
         const isCorrect = (input === puzzleState.name) || (knownName === puzzleState.name)
 
-        // 如果既不是本名也没有别名，说明不是角色名，放行
-        if (!isCorrect && !knownName) {
-            return false
-        }
+        if (!isCorrect && !knownName) return false
 
         if (isCorrect) {
-            // 答对
             let revealBuffer = null
             try {
                 revealBuffer = await renderPuzzleReveal(puzzleState)
@@ -381,7 +407,7 @@ export async function guess(e) {
         return true
     }
 
-    // 普通猜角色模式
+    // 普通猜角色模式（含像素模式）
     const game = games.get(groupId)
     if (!game) return false
 
@@ -393,10 +419,7 @@ export async function guess(e) {
     const knownName = aliasMap[input]
     const isCorrect = (input === game.name) || (knownName === game.name)
 
-    // 如果既不是本名也没有别名，放行
-    if (!isCorrect && !knownName) {
-        return false
-    }
+    if (!isCorrect && !knownName) return false
 
     if (isCorrect) {
         if (game.mode === 'birthday' && game.year) {
@@ -417,6 +440,17 @@ export async function guess(e) {
             await e.reply(replyParts)
         } else if (game.isIconMode) {
             await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
+        } else if (game.isPixelMode) {
+            // ★ 像素模式：答对时附带原图
+            let originalBuffer = null
+            try {
+                originalBuffer = await renderPixelReveal(game)
+            } catch (err) {
+                logger?.error('[像素猜角色] 生成原图失败', err)
+            }
+            let replyParts = [segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`]
+            if (originalBuffer) replyParts.push(segment.image(originalBuffer))
+            await e.reply(replyParts)
         } else {
             try {
                 const revealBuffer = await renderReveal(game)
