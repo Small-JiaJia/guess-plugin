@@ -2,13 +2,16 @@
 // 模块：多语言猜角色 (language)
 // 职责：显示角色 face.webp，从 6 个不同语言的名称中选出正确的
 // 路径：./plugins/guess-plugin/apps/language.js
-// 依赖：core, sharp, fs, path
+// 依赖：core, genshin-db, node-cron, sharp, fs, path
 // ============================================================
 
 import sharp from 'sharp'
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { exec } from 'child_process'
+import genshindb from 'genshin-db'
+import cron from 'node-cron'
 import {
     games, recentlyUsed,
     randomItem, shuffleArray,
@@ -18,81 +21,173 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const GENSHIN_CHARACTER_DIR = path.join(__dirname, '../resources/genshin/character')
-const ROLE_DICT_PATH = path.join(__dirname, '../data/roledictionary.json')
+const PLUGIN_ROOT = path.join(__dirname, '..')
 
 // ---------- 常量 ----------
-const OPTION_COUNT = 6                       // 选项数量（A-F）
-const CHINESE_LANG = 'ChineseSimplified'     // 中文键名
-const CHINESE_CORRECT_RATE = 0.05            // 中文作为正确答案的概率
-const SAME_LANG_RATE = 0.20                  // ★ 恶趣味概率：6 个选项全是同一非中文语言
+const OPTION_COUNT = 6
+const CHINESE_LANG = 'ChineseSimplified'
+const CHINESE_CORRECT_RATE = 0.05
+const SAME_LANG_RATE = 0.10
 
-// 固定的 5 种必出语言（正常模式）
 const FIXED_LANGS = ['ChineseSimplified', 'English', 'Japanese', 'Korean', 'Russian']
-// 第 6 个选项从这些语言中随机出（正常模式）
 const EXTRA_LANGS = ['German', 'Spanish', 'French', 'Indonesian', 'Portuguese', 'Thai', 'Vietnamese']
-// 恶趣味模式可选的"同一语言"池（排除中文，避免太简单）
 const SAME_LANG_POOL = ['English', 'Japanese', 'Korean', 'Russian', 'German', 'Spanish', 'French', 'Indonesian', 'Portuguese', 'Thai', 'Vietnamese']
 
-// ---------- 词典缓存 ----------
-let roleDict = null
-let dictLoading = false
+const ALL_LANGS = [
+    'ChineseSimplified', 'ChineseTraditional', 'English', 'Japanese', 'Korean',
+    'Russian', 'German', 'Spanish', 'French', 'Indonesian', 'Portuguese',
+    'Thai', 'Vietnamese'
+]
+
+// ---------- 缓存 ----------
+// 结构：{ names: [中文名...], data: { 中文名: { enName, langs: {lang: name} } } }
+let cachedRoleNames = null
+let cachedRoleData = null
+let cacheLoading = false
+
+// ============================================================
+// 1. 数据加载与缓存
+// ============================================================
 
 /**
- * 加载多语言词典
+ * 查询单个角色（用英文名）在所有语言下的名字
  */
-async function loadRoleDict() {
-    if (roleDict) return roleDict
-    if (dictLoading) {
-        while (dictLoading) await new Promise(r => setTimeout(r, 100))
-        return roleDict
+function getRoleAllLangs(roleEnName) {
+    const result = {}
+    for (const lang of ALL_LANGS) {
+        genshindb.setOptions({ resultLanguage: lang })
+        const data = genshindb.characters(roleEnName)
+        if (data && data.name) {
+            result[lang] = data.name
+        }
     }
-    dictLoading = true
-    try {
-        const content = fs.readFileSync(ROLE_DICT_PATH, 'utf-8')
-        roleDict = JSON.parse(content)
-        logger?.info(`[多语言猜角色] 加载了 ${Object.keys(roleDict).length} 个角色的多语言名`)
-    } catch (err) {
-        logger?.error('[多语言猜角色] 加载词典失败', err)
-        roleDict = {}
-    } finally {
-        dictLoading = false
-    }
-    return roleDict
+    genshindb.setOptions({ resultLanguage: 'English' })
+    return result
 }
 
 /**
- * 检查角色是否有 face.webp 头像
+ * 加载所有角色（以中文名为键）的多语言名到缓存
  */
-function hasFaceImage(name) {
-    const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'face.webp')
+async function loadAllRoleData(forceRefresh = false) {
+    if (cachedRoleNames && cachedRoleData && !forceRefresh) {
+        return { names: cachedRoleNames, data: cachedRoleData }
+    }
+    if (cacheLoading) {
+        while (cacheLoading) await new Promise(r => setTimeout(r, 200))
+        return { names: cachedRoleNames, data: cachedRoleData }
+    }
+    cacheLoading = true
+    try {
+        // genshin-db 返回英文名列表
+        const enNames = genshindb.characters('names', { matchCategories: true }) || []
+        const names = []
+        const data = {}
+
+        for (const enName of enNames) {
+            const langs = getRoleAllLangs(enName)
+            const chineseName = langs[CHINESE_LANG]
+            if (!chineseName) continue
+
+            // ★ 只有本地有对应中文目录的角色才纳入
+            if (!fs.existsSync(path.join(GENSHIN_CHARACTER_DIR, chineseName))) continue
+
+            names.push(chineseName)
+            data[chineseName] = {
+                enName,
+                langs,
+            }
+        }
+
+        cachedRoleNames = names
+        cachedRoleData = data
+        logger?.info(`[多语言猜角色] 缓存了 ${names.length} 个角色（本地有目录）的多语言名`)
+    } catch (err) {
+        logger?.error('[多语言猜角色] 加载角色数据失败', err)
+        throw err
+    } finally {
+        cacheLoading = false
+    }
+    return { names: cachedRoleNames, data: cachedRoleData }
+}
+
+// ============================================================
+// 2. 自动更新逻辑（每周五凌晨 3 点）
+// ============================================================
+
+let updateTaskStarted = false
+
+function updateGenshinDb() {
+    return new Promise((resolve) => {
+        logger?.info('[多语言猜角色] 开始自动更新 genshin-db...')
+        exec(
+            'npm install genshin-db@latest --no-audit --no-fund',
+            { cwd: PLUGIN_ROOT, timeout: 300000 },
+            (error) => {
+                if (error) {
+                    logger?.error('[多语言猜角色] genshin-db 更新失败', error.message)
+                    resolve(false)
+                    return
+                }
+                logger?.info('[多语言猜角色] genshin-db 更新成功')
+                cachedRoleNames = null
+                cachedRoleData = null
+                resolve(true)
+            }
+        )
+    })
+}
+
+function startWeeklyUpdateTask() {
+    if (updateTaskStarted) return
+    updateTaskStarted = true
+    // 每周五 03:00（Asia/Shanghai）
+    cron.schedule('0 0 3 * * 5', () => {
+        updateGenshinDb()
+    }, {
+        timezone: 'Asia/Shanghai'
+    })
+    logger?.info('[多语言猜角色] 已启动每周五 03:00 自动更新 genshin-db 的定时任务')
+}
+
+startWeeklyUpdateTask()
+
+// ============================================================
+// 3. 辅助函数
+// ============================================================
+
+function hasFaceImage(chineseName) {
+    const p = path.join(GENSHIN_CHARACTER_DIR, chineseName, 'imgs', 'face.webp')
     return fs.existsSync(p)
 }
 
-/**
- * 获取角色 face.webp 路径
- */
-function getFaceImagePath(name) {
-    const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'face.webp')
+function getFaceImagePath(chineseName) {
+    const p = path.join(GENSHIN_CHARACTER_DIR, chineseName, 'imgs', 'face.webp')
     return fs.existsSync(p) ? p : null
 }
 
-/**
- * 从角色数据中获取所有非空语言名
- */
-function getAvailableLangs(roleData) {
-    return Object.keys(roleData).filter(k =>
-        roleData[k] && String(roleData[k]).trim() !== ''
+function getAvailableLangs(langsObj) {
+    return Object.keys(langsObj).filter(k =>
+        langsObj[k] && String(langsObj[k]).trim() !== ''
     )
 }
 
-/**
- * 启动多语言猜角色
- */
+// ============================================================
+// 4. 启动多语言猜角色
+// ============================================================
+
 export async function startLanguageGame(e) {
-    const dict = await loadRoleDict()
-    const allNames = Object.keys(dict)
-    if (allNames.length === 0) {
-        await e.reply('多语言词典加载失败，请检查 data/roledictionary.json')
+    let roleNames, roleData
+    try {
+        const data = await loadAllRoleData()
+        roleNames = data.names
+        roleData = data.data
+    } catch (err) {
+        await e.reply('角色数据加载失败，请检查 genshin-db 依赖是否安装')
+        return false
+    }
+
+    if (!roleNames || roleNames.length === 0) {
+        await e.reply('未获取到角色数据，请检查 genshin-db 或本地资源目录')
         return false
     }
 
@@ -105,14 +200,14 @@ export async function startLanguageGame(e) {
         return false
     }
 
-    // 过滤：有 face.webp 的角色
-    const available = allNames.filter(name => hasFaceImage(name))
+    // ★ 以中文名为主键；只保留本地有 face.webp 的
+    const available = roleNames.filter(name => hasFaceImage(name))
     if (available.length < OPTION_COUNT + 1) {
-        await e.reply(`可用角色不足（需至少 ${OPTION_COUNT + 1} 个），请检查资源`)
+        await e.reply(`可用角色不足（需至少 ${OPTION_COUNT + 1} 个，当前 ${available.length} 个），请检查资源目录`)
         return false
     }
 
-    // 冷却过滤
+    // 冷却过滤（用中文名做键）
     const now = Date.now()
     let cooled = available.filter(name => {
         const lastUsed = recentlyUsed.get(name) || 0
@@ -123,14 +218,13 @@ export async function startLanguageGame(e) {
         cooled = available
     }
 
-    // 选目标角色
+    // 选目标角色（中文名）
     const targetName = randomItem(cooled)
     recentlyUsed.set(targetName, now)
-    const targetData = dict[targetName]
-    const targetLangs = getAvailableLangs(targetData)
+    const targetLangs = roleData[targetName].langs
+    const targetAvailableLangs = getAvailableLangs(targetLangs)
 
-    // ========== 1. 判断本次是否为恶趣味模式 ==========
-    // 触发条件：随机命中 且 目标角色在某个非中文语言下有名字
+    // ========== 1. 判断恶趣味模式 ==========
     const isSameLangMode = Math.random() < SAME_LANG_RATE
 
     // ========== 2. 确定 6 个选项的语言 ==========
@@ -138,10 +232,8 @@ export async function startLanguageGame(e) {
     let correctLang
 
     if (isSameLangMode) {
-        // ★ 恶趣味：6 个选项全部为同一非中文语言
-        // 从目标角色有名字的语言中挑一个，尽量选"恶趣味"味道浓的
         const candidateSameLangs = SAME_LANG_POOL.filter(l =>
-            targetLangs.includes(l)
+            targetAvailableLangs.includes(l)
         )
         const sameLang = candidateSameLangs.length > 0
             ? randomItem(candidateSameLangs)
@@ -151,20 +243,16 @@ export async function startLanguageGame(e) {
         correctLang = sameLang
         logger?.info(`[多语言猜角色] 触发恶趣味模式，全部选项语言: ${sameLang}`)
     } else {
-        // 正常模式：6 种不同语言
-        // 先决定中文是否作为正确答案（5%）
-        if (Math.random() < CHINESE_CORRECT_RATE && targetLangs.includes(CHINESE_LANG)) {
+        if (Math.random() < CHINESE_CORRECT_RATE && targetAvailableLangs.includes(CHINESE_LANG)) {
             correctLang = CHINESE_LANG
         } else {
-            // 从非中文语言中选一个目标角色有名字的作为正确语言
             const nonChineseFixed = ['English', 'Japanese', 'Korean', 'Russian']
             const candidates = [...nonChineseFixed, ...EXTRA_LANGS].filter(l =>
-                targetLangs.includes(l)
+                targetAvailableLangs.includes(l)
             )
             correctLang = candidates.length > 0 ? randomItem(candidates) : CHINESE_LANG
         }
 
-        // 语言组合：固定 5 种 + 1 随机，确保 correctLang 一定在集合中
         const randomExtraLang = randomItem(EXTRA_LANGS)
         const base = new Set([...FIXED_LANGS, randomExtraLang])
         if (!base.has(correctLang)) {
@@ -173,13 +261,10 @@ export async function startLanguageGame(e) {
         }
         optionLangs = Array.from(base).slice(0, OPTION_COUNT)
 
-        // 集合可能多于 6（如果 correctLang 加入了），需要裁剪但保留 correctLang
         if (optionLangs.length > OPTION_COUNT) {
-            // 移除一个非 correctLang 的元素
             optionLangs = optionLangs.filter((l, i) =>
                 l === correctLang || i < OPTION_COUNT
             )
-            // 确保长度为 6
             while (optionLangs.length > OPTION_COUNT) {
                 const idx = optionLangs.findIndex(l => l !== correctLang)
                 optionLangs.splice(idx, 1)
@@ -192,8 +277,8 @@ export async function startLanguageGame(e) {
     const usedRoles = new Set([targetName])
     const usedNames = new Set()
 
-    // 先把正确选项放进去（避免被去重逻辑影响）
-    const correctName = targetData[correctLang]
+    // 正确选项
+    const correctName = targetLangs[correctLang]
     if (correctName) {
         options.push({
             name: correctName,
@@ -204,17 +289,13 @@ export async function startLanguageGame(e) {
         usedNames.add(correctName)
     }
 
-    // 处理剩余的（OPTION_COUNT-1）个语言槽位
-    // 注意：恶趣味模式下 optionLangs 长度为 6，但只有 1 个是 correctLang 的"正确位置"
-    //      其余 5 个都是 sameLang 的干扰项，需要找同语言的其他角色
+    // 干扰项语言槽位
     let langSlots = []
     if (isSameLangMode) {
-        // 5 个干扰位
         for (let i = 0; i < OPTION_COUNT - 1; i++) {
             langSlots.push(optionLangs[i])
         }
     } else {
-        // 5 个不同语言的干扰位
         for (const l of optionLangs) {
             if (l === correctLang) continue
             langSlots.push(l)
@@ -222,15 +303,15 @@ export async function startLanguageGame(e) {
     }
 
     for (const lang of langSlots) {
-        const pool = allNames.filter(n => !usedRoles.has(n))
+        const pool = roleNames.filter(n =>
+            !usedRoles.has(n) && roleData[n].langs[lang]
+        )
         let found = false
-        // 优先找未用过的角色
+
         for (let attempt = 0; attempt < 300 && pool.length > 0; attempt++) {
             const otherName = randomItem(pool)
-            const otherData = dict[otherName]
-            const name = otherData[lang]
-            if (!name || String(name).trim() === '') continue
-            if (usedNames.has(name)) continue
+            const name = roleData[otherName].langs[lang]
+            if (!name || usedNames.has(name)) continue
             options.push({
                 name,
                 lang,
@@ -242,15 +323,13 @@ export async function startLanguageGame(e) {
             found = true
             break
         }
+
         if (!found) {
-            // 兜底：允许角色复用，只保证名字不重复
             for (let attempt = 0; attempt < 300; attempt++) {
-                const otherName = randomItem(allNames)
+                const otherName = randomItem(roleNames)
                 if (otherName === targetName) continue
-                const otherData = dict[otherName]
-                const name = otherData[lang]
-                if (!name || String(name).trim() === '') continue
-                if (usedNames.has(name)) continue
+                const name = roleData[otherName].langs[lang]
+                if (!name || usedNames.has(name)) continue
                 options.push({
                     name,
                     lang,
@@ -262,23 +341,20 @@ export async function startLanguageGame(e) {
                 break
             }
         }
+
         if (!found) {
             logger?.warn(`[多语言猜角色] 无法为语言 ${lang} 找到干扰项`)
         }
     }
 
-    // 选项不足时兜底
     if (options.length < OPTION_COUNT) {
         await e.reply('生成选项失败（干扰项不足），请重试')
         return false
     }
-
-    // 只保留前 OPTION_COUNT 个
     if (options.length > OPTION_COUNT) {
         options.length = OPTION_COUNT
     }
 
-    // 打乱选项顺序
     shuffleArray(options)
 
     // ========== 4. 生成头像 ==========
