@@ -484,6 +484,14 @@ export async function renderPuzzleReveal(puzzleState) {
 export async function generateCrop(game) {
     const { mode, name, iconPath, imgPath } = game
 
+    // 剪影模式：直接返回已缓存的剪影图
+    if (game.shadowMode) {
+        if (!game.shadowBuffer) {
+            throw new Error('剪影图未生成')
+        }
+        return game.shadowBuffer
+    }
+
     // 命座/天赋/料理模式：直接使用固定图片（不裁剪）
     if (mode === 'constellation' || mode === 'constellation_simple' || mode === 'constellation_hard' ||
         mode === 'talent' || mode === 'talent_simple' || mode === 'talent_hard' ||

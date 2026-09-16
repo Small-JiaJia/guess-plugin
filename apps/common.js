@@ -1,9 +1,10 @@
 // ============================================================
 // 模块：公共指令 (common)
 // 职责：处理 guess、hint、reveal、endGame、help 等公共功能
-// 依赖：core, image, icon, pixel
+// 依赖：core, image, icon, pixel, shadow
 // ============================================================
 
+import sharp from 'sharp'
 import {
     games, puzzleGames,
     loadRoleData,
@@ -19,6 +20,7 @@ import {
 } from './image.js'
 import { buildHintMessage } from './icon.js'
 import { handlePixelHint, renderPixelReveal } from './pixel.js'
+import { computeInnerCells, countAllInnerCells, renderShadowImage } from './shadow.js'
 
 // ---------- 帮助指令 ----------
 export async function help(e) {
@@ -31,7 +33,8 @@ export async function help(e) {
   #猜角色          - 显示抽卡立绘图局部（无滤镜）
   #猜立绘          - 显示全身立绘图局部（无滤镜）
   #像素猜角色      - 立绘转 8x8 像素马赛克（#提示 可提升分辨率 8→12→16→24→32）
-  #多语言猜角色    - 显示头像，从 6 个不同语言的名称中选出正确选项（A-F）
+  #剪影猜角色      - 立绘转皮影戏剪影（#提示 逐步揭示剪影内部）
+  #多语言猜角色    - 显示头像，从 6 个多语言名中选出正确的
   #碎碎冰猜立绘    - 立绘被打碎成不规则碎片（默认100块）
   #碎碎冰猜角色    - 抽卡立绘被打碎成不规则碎片（默认100块）
   #碎碎冰猜立绘 120 - 指定碎片数量（20~200块）
@@ -54,6 +57,11 @@ export async function help(e) {
   #料理猜角色简单  - 显示特色料理，初始2条提示
   #料理猜角色困难  - 显示特色料理，初始无提示
 
+【剪影玩法说明】
+  - 初始显示纯深棕剪影（仅有外轮廓，内部完全填平）
+  - #提示 每次随机揭示约 1/5 的剪影内部格子
+  - 玩家通过逐步显露的内部纹样推理角色
+
 【碎碎冰玩法说明】
   - 立绘/抽卡立绘被打碎成不规则碎片，全部打乱位置
   - 初始只揭示 2 块碎片（随机位置）
@@ -64,13 +72,12 @@ export async function help(e) {
   - 答对或看答案时显示不规则碎片合成图
 
 【游戏进行】
-  #提示            - 扩大显示区域 / 提升分辨率（像素模式）/ 揭示碎片（碎碎冰）
+  #提示            - 扩大显示区域 / 提升分辨率（像素）/ 揭示格子（剪影）/ 揭示碎片（碎碎冰）
   #看答案          - 揭晓答案
   #结束            - 结束当前游戏
 
 【作答方式】
   直接发送角色名或别名即可作答
-  多语言模式直接发送 A-F 作答（不分大小写）
     `.trim()
     await e.reply(helpText)
     return true
@@ -124,12 +131,6 @@ export async function hint(e) {
         return false
     }
 
-    // ★ 语言模式不支持提示
-    if (game.isLanguageMode) {
-        await e.reply('多语言猜角色模式不支持提示，请直接发送 A-F 作答')
-        return true
-    }
-
     // 生日模式
     if (game.mode === 'birthday') {
         if (!game.hintCount) game.hintCount = 0
@@ -155,173 +156,277 @@ export async function hint(e) {
         }
         return true
     }
-        // ★ 像素模式：逐步提升分辨率 8→12→16→24→32
-        if (game.isPixelMode) {
-            try {
-                const { buffer, message } = await handlePixelHint(game, groupId)
-                if (buffer) {
-                    await e.reply([segment.image(buffer), '\n' + message])
-                } else {
-                    await e.reply(message)
-                }
-            } catch (err) {
-                logger?.error('[像素猜角色] 提示失败', err)
-                await e.reply(`提示失败：${err.message}`)
-            }
-            return true
-        }
-    
-        // 图标模式
-        if (game.isIconMode) {
-            if (!game.hintPool) game.hintPool = []
-            if (game.hintIndex === undefined) game.hintIndex = -1
-    
-            if (game.hintIndex >= game.hintPool.length - 1) {
-                await e.reply('所有提示已给出，请作答或发送 #看答案')
-                return true
-            }
-            game.hintIndex++
-            const msgParts = buildHintMessage(game)
-            try {
-                const buffer = await generateCrop(game)
-                await e.reply([...msgParts, segment.image(buffer)])
-            } catch (err) {
-                logger?.error('[猜角色] 提示失败', err)
-                await e.reply(`提示失败：${err.message}`)
-            }
-            return true
-        }
-    
-        // 普通模式：扩大裁剪
-        const minSide = Math.min(game.imageWidth, game.imageHeight)
-        if (game.cropSide >= minSide) {
-            await reveal(e)
-            return true
-        }
-    
-        const full = enlargeCrop(game)
+
+    // 像素模式：逐步提升分辨率 8→12→16→24→32
+    if (game.isPixelMode) {
         try {
-            const buffer = await generateCrop(game)
-            await e.reply([segment.image(buffer), '\n已扩大显示区域'])
-            if (full) {
-                await e.reply('图片已完全显示，再提示将揭示答案')
+            const { buffer, message } = await handlePixelHint(game, groupId)
+            if (buffer) {
+                await e.reply([segment.image(buffer), '\n' + message])
+            } else {
+                await e.reply(message)
             }
         } catch (err) {
-            logger?.error('[猜角色] 提示生成失败', err)
+            logger?.error('[像素猜角色] 提示失败', err)
             await e.reply(`提示失败：${err.message}`)
         }
         return true
     }
-    
-    // ---------- 看答案 ----------
-    export async function reveal(e) {
-        const groupId = e.group_id
-        if (!groupId) return false
-        if (cleanTimeout(groupId)) {
-            await e.reply('游戏已超时')
-            return false
-        }
-    
-        // 碎碎冰模式
-        if (puzzleGames.has(groupId)) {
-            const puzzleState = puzzleGames.get(groupId)
-            if (!puzzleState) {
-                await e.reply('当前没有进行中的碎碎冰游戏')
-                return false
-            }
-            let revealBuffer = null
-            try {
-                revealBuffer = await renderPuzzleReveal(puzzleState)
-            } catch (err) {
-                logger?.error('[碎碎冰] 生成揭晓图失败', err)
-            }
-            let replyParts = [`答案是：${puzzleState.name}`]
-            if (revealBuffer) replyParts.push(segment.image(revealBuffer))
-            await e.reply(replyParts)
-            cleanPuzzleGame(groupId)
+
+    // ★ 剪影模式：固定步长揭示内部格子
+    if (game.shadowMode) {
+        const data = game.shadowData
+        const gridSize = game.shadowGridSize
+        const cellRevealed = game.shadowCellRevealed
+
+        if (!data || !cellRevealed) {
+            await e.reply('游戏状态异常，请重新开始')
             return true
         }
-    
-        const game = games.get(groupId)
-        if (!game) {
-            await e.reply('当前没有进行中的游戏')
-            return false
-        }
-    
-        // 生日模式
-        if (game.mode === 'birthday' && game.year) {
-            const msg = getBirthdayMessage(game.name, game.year)
-            const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
-            let revealBuffer = null
-            try {
-                revealBuffer = await renderReveal(game)
-            } catch (err) {
-                logger?.error('[猜生日贺图] 生成揭晓图失败', err)
-            }
-            let replyParts = [`答案是：\n${game.year}年 『${game.name}』 生日贺图`]
-            if (revealBuffer) replyParts.push(segment.image(revealBuffer))
-            if (formattedMsg) replyParts.push(`\n\n${formattedMsg}`)
-            await e.reply(replyParts)
-            games.delete(groupId)
+
+        // 找出所有"内部但未揭示"的格子
+        const innerCells = computeInnerCells(data, gridSize, cellRevealed)
+
+        if (innerCells.length === 0) {
+            await e.reply('所有剪影内部已揭示，请作答或发送 #看答案')
             return true
         }
-    
-        // 图标模式
-        if (game.isIconMode) {
-            await e.reply(`答案是：${game.name}`)
-            games.delete(groupId)
-            return true
+
+        // ★ 固定步长：每次揭示"总内部格数"的 1/5，保证 5 次内完全揭示
+        const totalInner = game.shadowTotalInner || countAllInnerCells(data, gridSize)
+        const step = Math.max(1, Math.ceil(totalInner / 5))
+        const revealCount = Math.min(step, innerCells.length)
+
+        const shuffled = shuffleArray([...innerCells])
+        for (let i = 0; i < revealCount && i < shuffled.length; i++) {
+            cellRevealed[shuffled[i]] = true
         }
-    
-        // 像素模式
-        if (game.isPixelMode) {
-            let originalBuffer = null
-            try {
-                originalBuffer = await renderPixelReveal(game)
-            } catch (err) {
-                logger?.error('[像素猜角色] 生成原图失败', err)
-            }
-            let replyParts = [`答案是：${game.name}`]
-            if (originalBuffer) replyParts.push(segment.image(originalBuffer))
-            await e.reply(replyParts)
-            games.delete(groupId)
-            return true
-        }
-    
-        // ★ 语言模式
-        if (game.isLanguageMode) {
-            await e.reply(`答案是：${game.name}`)
-            games.delete(groupId)
-            return true
-        }
-    
-        // 普通模式
+
+        // 重新渲染
+        let buffer
         try {
-            const revealBuffer = await renderReveal(game)
-            await e.reply([`答案是：${game.name}`, segment.image(revealBuffer)])
+            buffer = await renderShadowImage(data, { gridSize, cellRevealed })
         } catch (err) {
-            logger?.error('[猜角色] 生成揭晓图失败', err)
-            await e.reply(`答案是：${game.name}`)
+            logger?.error('[剪影猜角色] 渲染失败', err)
+            await e.reply(`渲染失败：${err.message}`)
+            return true
         }
+
+        game.shadowBuffer = buffer
+
+        // 统计当前已揭示的内部格子数
+        const cellW = data.cropW / gridSize
+        const cellH = data.cropH / gridSize
+        let revealedInnerCount = 0
+        for (let gy = 0; gy < gridSize; gy++) {
+            for (let gx = 0; gx < gridSize; gx++) {
+                const idx = gy * gridSize + gx
+                if (!cellRevealed[idx]) continue
+                const x0 = Math.floor(gx * cellW)
+                const x1 = Math.floor((gx + 1) * cellW)
+                const y0 = Math.floor(gy * cellH)
+                const y1 = Math.floor((gy + 1) * cellH)
+                let c = 0
+                for (let y = y0; y < y1; y++) {
+                    for (let x = x0; x < x1; x++) {
+                        if (data.croppedMask[y * data.cropW + x] > 128) c++
+                    }
+                }
+                const area = (x1 - x0) * (y1 - y0)
+                if (area > 0 && c / area > 0.10) revealedInnerCount++
+            }
+        }
+
+        try {
+            await e.reply([
+                segment.image(buffer),
+                `\n📖 #提示 揭示 ${revealCount} 格（内部进度 ${revealedInnerCount}/${totalInner}）`
+            ])
+        } catch (err) {
+            logger?.error('[剪影猜角色] 发送失败', err)
+            await e.reply(`发送失败：${err.message}`)
+        }
+        return true
+    }
+
+    // 图标模式
+    if (game.isIconMode) {
+        if (!game.hintPool) game.hintPool = []
+        if (game.hintIndex === undefined) game.hintIndex = -1
+
+        if (game.hintIndex >= game.hintPool.length - 1) {
+            await e.reply('所有提示已给出，请作答或发送 #看答案')
+            return true
+        }
+        game.hintIndex++
+        const msgParts = buildHintMessage(game)
+        try {
+            const buffer = await generateCrop(game)
+            await e.reply([...msgParts, segment.image(buffer)])
+        } catch (err) {
+            logger?.error('[猜角色] 提示失败', err)
+            await e.reply(`提示失败：${err.message}`)
+        }
+        return true
+    }
+
+    // 语言模式（不支持提示）
+    if (game.isLanguageMode) {
+        await e.reply('多语言猜角色模式不支持提示，请直接发送 A-F 作答')
+        return true
+    }
+
+    // 普通模式：扩大裁剪
+    const minSide = Math.min(game.imageWidth, game.imageHeight)
+    if (game.cropSide >= minSide) {
+        await reveal(e)
+        return true
+    }
+
+    const full = enlargeCrop(game)
+    try {
+        const buffer = await generateCrop(game)
+        await e.reply([segment.image(buffer), '\n已扩大显示区域'])
+        if (full) {
+            await e.reply('图片已完全显示，再提示将揭示答案')
+        }
+    } catch (err) {
+        logger?.error('[猜角色] 提示生成失败', err)
+        await e.reply(`提示失败：${err.message}`)
+    }
+    return true
+}
+// ---------- 看答案 ----------
+export async function reveal(e) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    if (cleanTimeout(groupId)) {
+        await e.reply('游戏已超时')
+        return false
+    }
+
+    // 碎碎冰模式
+    if (puzzleGames.has(groupId)) {
+        const puzzleState = puzzleGames.get(groupId)
+        if (!puzzleState) {
+            await e.reply('当前没有进行中的碎碎冰游戏')
+            return false
+        }
+        let revealBuffer = null
+        try {
+            revealBuffer = await renderPuzzleReveal(puzzleState)
+        } catch (err) {
+            logger?.error('[碎碎冰] 生成揭晓图失败', err)
+        }
+        let replyParts = [`答案是：${puzzleState.name}`]
+        if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+        await e.reply(replyParts)
+        cleanPuzzleGame(groupId)
+        return true
+    }
+
+    const game = games.get(groupId)
+    if (!game) {
+        await e.reply('当前没有进行中的游戏')
+        return false
+    }
+
+    // 生日模式
+    if (game.mode === 'birthday' && game.year) {
+        const msg = getBirthdayMessage(game.name, game.year)
+        const formattedMsg = msg ? msg.replace(/<br>/g, '\n').trim() : null
+        let revealBuffer = null
+        try {
+            revealBuffer = await renderReveal(game)
+        } catch (err) {
+            logger?.error('[猜生日贺图] 生成揭晓图失败', err)
+        }
+        let replyParts = [`答案是：\n${game.year}年 『${game.name}』 生日贺图`]
+        if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+        if (formattedMsg) replyParts.push(`\n\n${formattedMsg}`)
+        await e.reply(replyParts)
         games.delete(groupId)
         return true
     }
-    
-    // ---------- 结束游戏 ----------
-    export async function endGame(e) {
-        const groupId = e.group_id
-        if (!groupId) return false
-        cleanTimeout(groupId)
-        const game = games.get(groupId)
-        if (!game && !puzzleGames.has(groupId)) {
-            await e.reply('当前没有进行中的游戏')
-            return false
-        }
-        cleanPuzzleGame(groupId)
-        await e.reply('游戏已结束')
+
+    // 图标模式
+    if (game.isIconMode && !game.shadowMode) {
+        await e.reply(`答案是：${game.name}`)
+        games.delete(groupId)
         return true
     }
-    // ---------- 作答处理（guess） ----------
+
+    // 像素模式
+    if (game.isPixelMode) {
+        let originalBuffer = null
+        try {
+            originalBuffer = await renderPixelReveal(game)
+        } catch (err) {
+            logger?.error('[像素猜角色] 生成原图失败', err)
+        }
+        let replyParts = [`答案是：${game.name}`]
+        if (originalBuffer) replyParts.push(segment.image(originalBuffer))
+        await e.reply(replyParts)
+        games.delete(groupId)
+        return true
+    }
+
+    // ★ 剪影模式：显示答案 + 全揭示剪影图
+    if (game.shadowMode) {
+        let revealBuffer = null
+        try {
+            const data = game.shadowData
+            const gridSize = game.shadowGridSize
+            if (data && gridSize) {
+                // 全部格子标记为已揭示，得到"完全揭开"的剪影图
+                const allRevealed = new Array(gridSize * gridSize).fill(true)
+                revealBuffer = await renderShadowImage(data, { gridSize, cellRevealed: allRevealed })
+            }
+        } catch (err) {
+            logger?.error('[剪影猜角色] 生成全揭示图失败', err)
+        }
+        let replyParts = [`答案是：${game.name}`]
+        if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+        await e.reply(replyParts)
+        games.delete(groupId)
+        return true
+    }
+
+    // 语言模式
+    if (game.isLanguageMode) {
+        await e.reply(`答案是：${game.name}`)
+        games.delete(groupId)
+        return true
+    }
+
+    // 普通模式
+    try {
+        const revealBuffer = await renderReveal(game)
+        await e.reply([`答案是：${game.name}`, segment.image(revealBuffer)])
+    } catch (err) {
+        logger?.error('[猜角色] 生成揭晓图失败', err)
+        await e.reply(`答案是：${game.name}`)
+    }
+    games.delete(groupId)
+    return true
+}
+
+// ---------- 结束游戏 ----------
+export async function endGame(e) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    cleanTimeout(groupId)
+    const game = games.get(groupId)
+    if (!game && !puzzleGames.has(groupId)) {
+        await e.reply('当前没有进行中的游戏')
+        return false
+    }
+    cleanPuzzleGame(groupId)
+    await e.reply('游戏已结束')
+    return true
+}
+
+// ---------- 作答处理（guess） ----------
 export async function guess(e) {
     if (e.user_id === e.self_id) return false
 
@@ -332,7 +437,7 @@ export async function guess(e) {
         return true
     }
 
-    // ========== 碎碎冰模式 ==========
+    // 碎碎冰模式
     if (puzzleGames.has(groupId)) {
         const puzzleState = puzzleGames.get(groupId)
         if (!puzzleState) return false
@@ -423,7 +528,7 @@ export async function guess(e) {
         return true
     }
 
-    // ========== 普通猜角色模式（含像素、语言、图标、生日等） ==========
+    // 普通猜角色模式（含像素、语言、剪影、图标、生日）
     const game = games.get(groupId)
     if (!game) return false
 
@@ -431,11 +536,10 @@ export async function guess(e) {
     const input = e.msg.trim()
     if (input.startsWith('#')) return false
 
-    // ★ 语言模式：只处理 A-F 字母作答（不分大小写）
+    // 语言模式：只处理 A-F 字母作答
     if (game.isLanguageMode) {
         const letter = input.toUpperCase()
         if (!/^[A-F]$/.test(letter)) {
-            // 非 A-F 字母，直接放行（不参与角色名匹配）
             return false
         }
         const idx = letter.charCodeAt(0) - 65
@@ -454,7 +558,7 @@ export async function guess(e) {
         }
     }
 
-    // 通用角色名匹配（像素、图标、生日、普通模式）
+    // 通用角色名匹配
     const { aliasMap } = await loadRoleData()
     const knownName = aliasMap[input]
     const isCorrect = (input === game.name) || (knownName === game.name)
@@ -478,7 +582,23 @@ export async function guess(e) {
             if (revealBuffer) replyParts.push(segment.image(revealBuffer))
             if (formattedMsg) replyParts.push(`\n\n${formattedMsg}`)
             await e.reply(replyParts)
-        } else if (game.isIconMode) {
+        } else if (game.shadowMode) {
+            // ★ 剪影模式：附带全揭示剪影图
+            let revealBuffer = null
+            try {
+                const data = game.shadowData
+                const gridSize = game.shadowGridSize
+                if (data && gridSize) {
+                    const allRevealed = new Array(gridSize * gridSize).fill(true)
+                    revealBuffer = await renderShadowImage(data, { gridSize, cellRevealed: allRevealed })
+                }
+            } catch (err) {
+                logger?.error('[剪影猜角色] 生成全揭示图失败', err)
+            }
+            let replyParts = [segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`]
+            if (revealBuffer) replyParts.push(segment.image(revealBuffer))
+            await e.reply(replyParts)
+        }else if (game.isIconMode) {
             await e.reply([segment.at(e.user_id), ` 恭喜答对！答案是 ${game.name}`])
         } else if (game.isPixelMode) {
             let originalBuffer = null
@@ -505,4 +625,4 @@ export async function guess(e) {
         await e.reply('不对哦，再想想~')
         return true
     }
-}
+}   
