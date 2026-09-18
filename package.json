@@ -5,10 +5,10 @@
   "description": "这是一款面向 Miao-Yunzai 的猜角色类插件，支持头像、全身立绘、命座、天赋等多种不同类型的猜图模式，玩法丰富多样。",
   "type": "module",
   "dependencies": {
-    "sharp": "^0.33.5",
     "art-template": "^4.13.2",
     "d3-delaunay": "^6.0.0",
     "genshin-db": "^5.2.7",
-    "node-cron": "^3.0.0"
+    "node-cron": "^3.0.0",
+    "sharp": "^0.33.5"
   }
 }

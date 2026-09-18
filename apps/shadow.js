@@ -34,21 +34,35 @@ const GRID_SIZE = 12
 const CELL_FG_THRESHOLD = 0.10
 
 // ---------- 去噪参数 ----------
-const MASK_BLUR_SIGMA = 1.5              // 蒙版平滑半径
-const MASK_BLUR_THRESHOLD = 200          // 平滑后的高阈值（>200 才算前景）
-const COMPONENT_MIN_RATIO = 0.15         // 连通块面积至少是最大块的 15%
+const MASK_BLUR_SIGMA = 1.5
+const MASK_BLUR_THRESHOLD = 200
+const COMPONENT_MIN_RATIO = 0.15
+
+// ---------- 支持的图源 ----------
+// 随机从这些文件名中挑选（角色目录下必须存在）
+const SHADOW_SOURCES = ['portrait.png', 'Introduction.png']
 
 // ---------- 路径辅助 ----------
-function checkShadowImageExists(name) {
-    if (!name || typeof name !== 'string') return false
-    const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'Introduction.png')
-    return fs.existsSync(p)
+// 返回该角色可用的所有图源路径
+function getAvailableSourcePaths(name) {
+    if (!name || typeof name !== 'string') return []
+    const result = []
+    for (const file of SHADOW_SOURCES) {
+        const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', file)
+        if (fs.existsSync(p)) result.push(p)
+    }
+    return result
 }
 
-function getShadowImagePath(name) {
-    if (!name || typeof name !== 'string') return null
-    const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', 'Introduction.png')
-    return fs.existsSync(p) ? p : null
+function checkShadowImageExists(name) {
+    return getAvailableSourcePaths(name).length > 0
+}
+
+// 从该角色可用的图源中随机选一个
+function getRandomShadowImagePath(name) {
+    const candidates = getAvailableSourcePaths(name)
+    if (candidates.length === 0) return null
+    return randomItem(candidates)
 }
 
 // ---------- Otsu ----------
@@ -120,7 +134,7 @@ function fillHoles(maskBuf, width, height) {
     return result
 }
 
-// ---------- 连通域过滤：只保留主要连通块 ----------
+// ---------- 连通域过滤 ----------
 function keepSignificantComponents(maskBuf, width, height, minRatio = COMPONENT_MIN_RATIO) {
     const size = width * height
     const labels = new Int32Array(size).fill(-1)
@@ -184,12 +198,11 @@ function keepSignificantComponents(maskBuf, width, height, minRatio = COMPONENT_
     return result
 }
 
-// ---------- 构建蒙版（带去噪） ----------
+// ---------- 构建蒙版 ----------
 async function buildMask(inputPath, width, height) {
     const meta = await sharp(inputPath).metadata()
     let maskBuf = null
 
-    // 优先用 alpha
     if (meta.hasAlpha) {
         const alphaBuf = await sharp(inputPath)
             .ensureAlpha()
@@ -215,7 +228,6 @@ async function buildMask(inputPath, width, height) {
         }
     }
 
-    // 亮度蒙版回退（带平滑去噪）
     if (!maskBuf) {
         const grayBuf = await sharp(inputPath)
             .resize(width, height)
@@ -233,14 +245,12 @@ async function buildMask(inputPath, width, height) {
         const cornerAvg = corners.reduce((a, b) => a + b, 0) / 4
         const bgIsLight = cornerAvg > 128
 
-        // 初始二值化
         const initialMask = Buffer.alloc(width * height)
         for (let i = 0; i < width * height; i++) {
             const isFg = bgIsLight ? grayBuf[i] < threshold : grayBuf[i] > threshold
             initialMask[i] = isFg ? 255 : 0
         }
 
-        // ★ 形态学平滑：blur 后高阈值化，去掉细小噪点
         const blurred = await sharp(initialMask, { raw: { width, height, channels: 1 } })
             .blur(MASK_BLUR_SIGMA)
             .raw()
@@ -254,13 +264,8 @@ async function buildMask(inputPath, width, height) {
         logger?.info(`[剪影猜角色] 使用亮度蒙版（阈值 ${threshold}，背景${bgIsLight ? '亮' : '暗'}，已平滑去噪）`)
     }
 
-    // 填洞
     maskBuf = fillHoles(maskBuf, width, height)
-
-    // ★ 连通域过滤
     maskBuf = keepSignificantComponents(maskBuf, width, height)
-
-    // ★ 填洞一次（连通域过滤后可能又有新洞）
     maskBuf = fillHoles(maskBuf, width, height)
 
     return maskBuf
@@ -528,7 +533,7 @@ export async function startShadowGame(e) {
 
     const allAvailable = loadedNames.filter(name => checkShadowImageExists(name))
     if (allAvailable.length === 0) {
-        await e.reply('未找到任何角色的 Introduction.png，请检查资源目录')
+        await e.reply('未找到任何角色的 portrait.png 或 Introduction.png，请检查资源目录')
         return false
     }
 
@@ -552,9 +557,10 @@ export async function startShadowGame(e) {
         return false
     }
 
-    const imgPath = getShadowImagePath(name)
+    // ★ 从 portrait.png / Introduction.png 中随机选一个
+    const imgPath = getRandomShadowImagePath(name)
     if (!imgPath) {
-        await e.reply(`未找到 ${name} 的 Introduction.png`)
+        await e.reply(`未找到 ${name} 的 portrait.png 或 Introduction.png`)
         return false
     }
 
@@ -600,7 +606,7 @@ export async function startShadowGame(e) {
     try {
         await e.reply([segment.image(buffer), '\n' + msg])
         games.set(groupId, game)
-        logger?.info(`[剪影猜角色] 群${groupId} 开始游戏，角色: ${name}，内部格数: ${totalInner}`)
+        logger?.info(`[剪影猜角色] 群${groupId} 开始游戏，角色: ${name}，图源: ${path.basename(imgPath)}，内部格数: ${totalInner}`)
     } catch (err) {
         logger?.error('[剪影猜角色] 发送失败', err)
         await e.reply(`发送失败：${err.message}`)
