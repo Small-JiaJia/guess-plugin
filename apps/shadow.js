@@ -39,18 +39,50 @@ const MASK_BLUR_THRESHOLD = 200
 const COMPONENT_MIN_RATIO = 0.15
 
 // ---------- 支持的图源 ----------
-// 随机从这些文件名中挑选（角色目录下必须存在）
-const SHADOW_SOURCES = ['portrait.png', 'Introduction.png']
+// 固定文件名（角色目录下必须存在）
+// ---------- 支持的图源与权重 ----------
+const FIXED_SHADOW_SOURCES = {
+    'portrait.png': 3,
+    'Introduction.png': 3,
+    'Activityillustration.png': 5,
+}
+const REGEX_SHADOW_SOURCES = [
+    { re: /^Activityillustration\d+\.png$/i, weight: 5 },
+]
+const DEFAULT_WEIGHT = 1
 
 // ---------- 路径辅助 ----------
 // 返回该角色可用的所有图源路径
 function getAvailableSourcePaths(name) {
     if (!name || typeof name !== 'string') return []
+    const dir = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs')
+    if (!fs.existsSync(dir)) return []
+
     const result = []
-    for (const file of SHADOW_SOURCES) {
-        const p = path.join(GENSHIN_CHARACTER_DIR, name, 'imgs', file)
-        if (fs.existsSync(p)) result.push(p)
+    const seen = new Set()
+    const files = fs.readdirSync(dir)
+
+    // 固定文件名（按权重表）
+    for (const [fileName, weight] of Object.entries(FIXED_SHADOW_SOURCES)) {
+        const p = path.join(dir, fileName)
+        if (fs.existsSync(p)) {
+            result.push({ path: p, weight })
+            seen.add(fileName)
+        }
     }
+
+    // 正则匹配（未在上面出现过的文件）
+    for (const file of files) {
+        if (seen.has(file)) continue
+        for (const { re, weight } of REGEX_SHADOW_SOURCES) {
+            if (re.test(file)) {
+                result.push({ path: path.join(dir, file), weight })
+                seen.add(file)
+                break
+            }
+        }
+    }
+
     return result
 }
 
@@ -58,11 +90,18 @@ function checkShadowImageExists(name) {
     return getAvailableSourcePaths(name).length > 0
 }
 
-// 从该角色可用的图源中随机选一个
+// 加权随机选图源
 function getRandomShadowImagePath(name) {
     const candidates = getAvailableSourcePaths(name)
     if (candidates.length === 0) return null
-    return randomItem(candidates)
+
+    const totalWeight = candidates.reduce((s, c) => s + c.weight, 0)
+    let r = Math.random() * totalWeight
+    for (const c of candidates) {
+        r -= c.weight
+        if (r <= 0) return c.path
+    }
+    return candidates[candidates.length - 1].path
 }
 
 // ---------- Otsu ----------

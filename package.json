@@ -7,7 +7,7 @@
   "dependencies": {
     "art-template": "^4.13.2",
     "d3-delaunay": "^6.0.0",
-    "genshin-db": "^5.2.7",
+    "genshin-db": "^5.2.14",
     "node-cron": "^3.0.0",
     "sharp": "^0.33.5"
   }
