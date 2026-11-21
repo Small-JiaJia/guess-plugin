@@ -5,10 +5,11 @@
 // ============================================================
 
 import {
-    games, recentlyUsed, roleNames, aliasMap,
-    loadRoleData, loadBirthdayMessages,
-    randomItem, shuffleArray,
-    cleanTimeout, COOLDOWN_MS
+    games, recentlyUsed,
+    loadRoleData,
+    randomItem,
+    withGameStartLock, withRoleReservation, isRoleReserved,
+    replyOrThrow, COOLDOWN_MS
 } from './core.js'
 import {
     checkImageExists,
@@ -57,6 +58,15 @@ export async function guessCommand(e) {
 
 // ---------- 启动普通猜角色 ----------
 export async function startGame(e, mode) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    return withGameStartLock(groupId,
+        () => e.reply('当前群已有游戏，请先结束或等待超时'),
+        () => startGameReserved(e, mode, groupId)
+    )
+}
+
+async function startGameReserved(e, mode, groupId) {
     // 确保数据已加载（如果未加载，需等待，此处直接调用 core 中的加载函数）
     // 注意：主入口会预先加载，但这里为安全可再检查
     const { roleNames: loadedNames } = await loadRoleData()
@@ -65,25 +75,24 @@ export async function startGame(e, mode) {
         return false
     }
 
-    const groupId = e.group_id
-    if (!groupId) return false
-
-    cleanTimeout(groupId)
-    if (games.has(groupId)) {
-        await e.reply('当前群已有游戏，请先结束或等待超时')
+    const now = Date.now()
+    const imageNames = loadedNames.filter(name => checkImageExists(mode, name))
+    const allAvailable = imageNames.filter(name => !isRoleReserved(name))
+    if (imageNames.length === 0) {
+        await e.reply(`未找到可用的角色图片 (模式: ${mode})`)
         return false
     }
-
-    const now = Date.now()
-    const allAvailable = loadedNames.filter(name => checkImageExists(mode, name))
+    if (allAvailable.length === 0) {
+        await e.reply('所有可用角色正在生成游戏，请稍后重试')
+        return false
+    }
     let availableNames = allAvailable.filter(name => {
         const lastUsed = recentlyUsed.get(name) || 0
         return now - lastUsed >= COOLDOWN_MS
     })
     if (availableNames.length === 0) {
-        recentlyUsed.clear()
         availableNames = allAvailable
-        logger?.info('[猜角色] 冷却已清空，所有角色重新可用')
+        logger?.info('[猜角色] 候选角色均在冷却中，本次从全部候选中选择')
     }
 
     if (availableNames.length === 0) {
@@ -92,8 +101,10 @@ export async function startGame(e, mode) {
     }
 
     const name = randomItem(availableNames)
-    recentlyUsed.set(name, now)
+    return withRoleReservation(name, commitRole => startGameForRole(e, mode, groupId, name, commitRole))
+}
 
+async function startGameForRole(e, mode, groupId, name, commitRole) {
     const imgPath = getImagePath(mode, name)
     if (!imgPath) {
         await e.reply(`未找到可用的角色图片 (模式: ${mode})`)
@@ -104,7 +115,7 @@ export async function startGame(e, mode) {
         mode,
         name,
         imgPath,
-        startedAt: Date.now(),
+        startedAt: 0,
         groupId,
         cropSide: 0,
         shownBounds: [],
@@ -112,14 +123,17 @@ export async function startGame(e, mode) {
 
     try {
         const buffer = await generateCrop(game)
-        if (mode === 'splash') {
-            await e.reply([segment.image(buffer), '\n发送 #提示 获取更多信息'])
-        } else {
-            await e.reply(segment.image(buffer))
-        }
+        game.startedAt = Date.now()
         games.set(groupId, game)
+        if (mode === 'splash') {
+            await replyOrThrow(e, [segment.image(buffer), '\n发送 #提示 获取更多信息'])
+        } else {
+            await replyOrThrow(e, segment.image(buffer))
+        }
+        commitRole()
         logger?.info(`[猜角色] 群${groupId} 开始游戏，角色: ${name}, 模式: ${mode}`)
     } catch (err) {
+        if (games.get(groupId) === game) games.delete(groupId)
         logger?.error('[猜角色] 生成图片失败', err)
         await e.reply(`生成图片失败：${err.message}`)
         return false

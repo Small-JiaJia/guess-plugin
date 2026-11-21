@@ -5,10 +5,11 @@
 // ============================================================
 
 import {
-    games, recentlyUsed, roleNames, aliasMap,
+    games, recentlyUsed,
     loadRoleData,
     randomItem, shuffleArray,
-    cleanTimeout, COOLDOWN_MS,
+    withGameStartLock, withRoleReservation, isRoleReserved,
+    replyOrThrow, COOLDOWN_MS,
     getExtraData
 } from './core.js'
 import {
@@ -20,18 +21,18 @@ import REGION_MAP from '../data/roleinformation.js'
 
 // ---------- 启动图标游戏 ----------
 export async function startIconGame(e, baseMode, difficulty, modeName) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    return withGameStartLock(groupId,
+        () => e.reply('当前群已有游戏，请先结束或等待超时'),
+        () => startIconGameReserved(e, baseMode, difficulty, modeName, groupId)
+    )
+}
+
+async function startIconGameReserved(e, baseMode, difficulty, modeName, groupId) {
     const { roleNames: loadedNames } = await loadRoleData()
     if (!loadedNames || loadedNames.length === 0) {
         await e.reply('角色数据加载失败，请检查')
-        return false
-    }
-
-    const groupId = e.group_id
-    if (!groupId) return false
-
-    cleanTimeout(groupId)
-    if (games.has(groupId)) {
-        await e.reply('当前群已有游戏，请先结束或等待超时')
         return false
     }
 
@@ -52,15 +53,24 @@ export async function startIconGame(e, baseMode, difficulty, modeName) {
     }
 
     const now = Date.now()
-    let allAvailable = []
+    let imageNames = []
     for (const name of loadedNames) {
         if (baseMode === 'food') {
             const info = REGION_MAP[name]
             if (!info || !info.specialDish) continue
         }
-        if (checkImageExists(mode, name)) {
-            allAvailable.push(name)
-        }
+        if (checkImageExists(mode, name)) imageNames.push(name)
+    }
+
+    if (imageNames.length === 0) {
+        await e.reply(`未找到任何角色的${modeName}图标，请检查图片目录`)
+        return false
+    }
+
+    const allAvailable = imageNames.filter(name => !isRoleReserved(name))
+    if (allAvailable.length === 0) {
+        await e.reply('所有可用角色正在生成游戏，请稍后重试')
+        return false
     }
 
     let availableNames = allAvailable.filter(name => {
@@ -68,9 +78,8 @@ export async function startIconGame(e, baseMode, difficulty, modeName) {
         return now - lastUsed >= COOLDOWN_MS
     })
     if (availableNames.length === 0) {
-        recentlyUsed.clear()
         availableNames = allAvailable
-        logger?.info('[猜角色] 冷却已清空，所有角色重新可用')
+        logger?.info('[猜角色] 图标模式候选均在冷却中，本次从全部候选中选择')
     }
 
     if (availableNames.length === 0) {
@@ -79,8 +88,12 @@ export async function startIconGame(e, baseMode, difficulty, modeName) {
     }
 
     const name = randomItem(availableNames)
-    recentlyUsed.set(name, now)
+    return withRoleReservation(name, commitRole => startIconGameForRole(
+        e, baseMode, difficulty, modeName, groupId, name, mode, initialHintCount, commitRole
+    ))
+}
 
+async function startIconGameForRole(e, baseMode, difficulty, modeName, groupId, name, mode, initialHintCount, commitRole) {
     const extra = getExtraData(name)
     if (!extra) {
         await e.reply(`角色 ${name} 的 data.json 不存在，无法开始游戏`)
@@ -126,16 +139,19 @@ export async function startIconGame(e, baseMode, difficulty, modeName) {
 
     try {
         const buffer = await generateCrop(game)
+        game.startedAt = Date.now()
+        games.set(groupId, game)
         if (initialHintCount > 0 && game.hintIndex >= 0) {
             const msgParts = buildHintMessage(game)
-            await e.reply([...msgParts, segment.image(buffer)])
+            await replyOrThrow(e, [...msgParts, segment.image(buffer)])
         } else {
-            await e.reply(segment.image(buffer))
+            await replyOrThrow(e, segment.image(buffer))
         }
-        games.set(groupId, game)
+        commitRole()
         const diffName = difficulty === '普通' ? '' : difficulty
         logger?.info(`[猜角色] 群${groupId} 开始${modeName}猜角色${diffName}，角色: ${name}，初始提示: ${initialHintCount}条`)
     } catch (err) {
+        if (games.get(groupId) === game) games.delete(groupId)
         logger?.error('[猜角色] 生成图片失败', err)
         await e.reply(`生成图片失败：${err.message}`)
         return false

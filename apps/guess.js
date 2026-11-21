@@ -23,7 +23,7 @@ export default class Guess extends plugin {
             event: 'message',
             priority: 1000,
             rule: [
-                { reg: '^#猜角色帮助$', fnc: 'help' },
+                { reg: '^(#猜角色帮助|#帮助)$', fnc: 'help' },
                 { reg: '^#命座猜角色(简单|普通|困难)?$', fnc: 'startIconConstellation' },
                 { reg: '^#天赋猜角色(简单|普通|困难)?$', fnc: 'startIconTalent' },
                 { reg: '^#料理猜角色(简单|普通|困难)?$', fnc: 'startIconFood' },
@@ -77,8 +77,10 @@ export default class Guess extends plugin {
 
     async loadData() {
         try {
-            await Promise.all([loadRoleData(), loadBirthdayMessages()])
-            const { roleNames, aliasMap } = await loadRoleData()
+            const [{ roleNames, aliasMap }] = await Promise.all([
+                loadRoleData(),
+                loadBirthdayMessages()
+            ])
             this.roleNames = roleNames
             this.aliasMap = aliasMap
             this.loaded = true

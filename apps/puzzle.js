@@ -9,40 +9,42 @@ import {
     games, puzzleGames, recentlyUsed,
     loadRoleData,
     randomItem, shuffleArray,
-    cleanTimeout, cleanPuzzleGame, COOLDOWN_MS,
+    withGameStartLock, withRoleReservation, isRoleReserved,
+    replyOrThrow, cleanPuzzleGame, COOLDOWN_MS,
     getExtraData
 } from './core.js'
 import {
     checkImageExists,
     getImagePath,
     generateVoronoiFragments,
-    generateCrop,
-    renderPuzzleReveal
+    generateCrop
 } from './image.js'
 
 // ---------- 带超时的 Promise 包装 ----------
 function withTimeout(promise, ms = 30000) {
+    let timer
     return Promise.race([
         promise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('操作超时')), ms))
-    ])
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('操作超时')), ms)
+        })
+    ]).finally(() => clearTimeout(timer))
 }
 
 export async function startPuzzle(e) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    return withGameStartLock(groupId,
+        () => e.reply('当前群已有游戏，请先结束或等待超时'),
+        () => startPuzzleReserved(e, groupId)
+    )
+}
+
+async function startPuzzleReserved(e, groupId) {
     // 加载角色数据
     const { roleNames: loadedNames } = await loadRoleData()
     if (!loadedNames || loadedNames.length === 0) {
         await e.reply('角色数据加载失败，请检查')
-        return false
-    }
-
-    const groupId = e.group_id
-    if (!groupId) return false
-
-    // 清理超时游戏
-    cleanTimeout(groupId)
-    if (puzzleGames.has(groupId)) {
-        await e.reply('当前群已有碎碎冰游戏，请先结束或等待超时')
         return false
     }
 
@@ -70,15 +72,23 @@ export async function startPuzzle(e) {
 
     // 冷却过滤
     const now = Date.now()
-    const allAvailable = loadedNames.filter(name => checkImageExists(imageMode, name))
+    const imageNames = loadedNames.filter(name => checkImageExists(imageMode, name))
+    const allAvailable = imageNames.filter(name => !isRoleReserved(name))
+    if (imageNames.length === 0) {
+        await e.reply(`未找到可用的${modeName}图片`)
+        return false
+    }
+    if (allAvailable.length === 0) {
+        await e.reply('所有可用角色正在生成游戏，请稍后重试')
+        return false
+    }
     let availableNames = allAvailable.filter(name => {
         const lastUsed = recentlyUsed.get(name) || 0
         return now - lastUsed >= COOLDOWN_MS
     })
     if (availableNames.length === 0) {
-        recentlyUsed.clear()
         availableNames = allAvailable
-        logger?.info(`[猜角色] 碎碎冰${modeName}冷却已清空，所有角色重新可用`)
+        logger?.info(`[猜角色] 碎碎冰${modeName}候选均在冷却中，本次从全部候选中选择`)
     }
 
     if (availableNames.length === 0) {
@@ -88,8 +98,12 @@ export async function startPuzzle(e) {
 
     // 随机选角色
     const name = randomItem(availableNames)
-    recentlyUsed.set(name, now)
+    return withRoleReservation(name, commitRole => startPuzzleForRole(
+        e, groupId, name, imageMode, modeName, imageType, fragmentCount, mergeThresholds, commitRole
+    ))
+}
 
+async function startPuzzleForRole(e, groupId, name, imageMode, modeName, imageType, fragmentCount, mergeThresholds, commitRole) {
     // 获取角色额外信息（用于提示，但碎碎冰模式暂未使用，保留）
     const extra = getExtraData(name)
     if (!extra) {
@@ -163,15 +177,17 @@ export async function startPuzzle(e) {
     try {
         // 渲染初始拼图状态（带30秒超时）
         const buffer = await withTimeout(generateCrop(game), 30000)
-        await e.reply([
+        puzzleState.startedAt = game.startedAt = Date.now()
+        await replyOrThrow(e, [
             segment.image(buffer),
             `\n🧊 已分割为 ${fragmentCount} 块碎片（${modeName}），初始揭示 2 块（随机位置）\n猜错一次揭示 1 块并累计猜错次数，累计猜错 ${mergeThresholds.join('、')} 次时自动归位\n#提示 可额外揭示 1 块碎片（不消耗猜错次数）`
         ])
+        commitRole()
         logger?.info(`[碎碎冰猜${modeName}] 群${groupId} 开始游戏，角色: ${name}，碎片: ${fragmentCount}块`)
     } catch (err) {
         logger?.error(`[碎碎冰猜${modeName}] 发送初始碎片失败`, err)
-        await e.reply(`发送碎片失败：${err.message || '未知错误'}`)
         cleanPuzzleGame(groupId)
+        await e.reply(`发送碎片失败：${err.message || '未知错误'}`)
         return false
     }
     return true

@@ -10,7 +10,8 @@ import {
     games, recentlyUsed,
     loadRoleData,
     randomItem,
-    cleanTimeout, COOLDOWN_MS,
+    withGameStartLock, withRoleReservation, isRoleReserved,
+    replyOrThrow, COOLDOWN_MS,
     getExtraData
 } from './core.js'
 import {
@@ -63,33 +64,41 @@ async function generatePixelImage(imagePath, grid, outputSize = OUTPUT_SIZE, bgC
  * 启动像素猜角色游戏
  */
 export async function startPixelGame(e) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    return withGameStartLock(groupId,
+        () => e.reply('当前群已有游戏，请先结束或等待超时'),
+        () => startPixelGameReserved(e, groupId)
+    )
+}
+
+async function startPixelGameReserved(e, groupId) {
     const { roleNames: loadedNames } = await loadRoleData()
     if (!loadedNames || loadedNames.length === 0) {
         await e.reply('角色数据加载失败，请检查')
         return false
     }
 
-    const groupId = e.group_id
-    if (!groupId) return false
-
-    cleanTimeout(groupId)
-    if (games.has(groupId)) {
-        await e.reply('当前群已有游戏，请先结束或等待超时')
-        return false
-    }
-
     // 固定使用立绘（splash）
     const mode = 'splash'
     const now = Date.now()
-    const allAvailable = loadedNames.filter(name => checkImageExists(mode, name))
+    const imageNames = loadedNames.filter(name => checkImageExists(mode, name))
+    const allAvailable = imageNames.filter(name => !isRoleReserved(name))
+    if (imageNames.length === 0) {
+        await e.reply('未找到可用的立绘图片，请检查资源')
+        return false
+    }
+    if (allAvailable.length === 0) {
+        await e.reply('所有可用角色正在生成游戏，请稍后重试')
+        return false
+    }
     let availableNames = allAvailable.filter(name => {
         const lastUsed = recentlyUsed.get(name) || 0
         return now - lastUsed >= COOLDOWN_MS
     })
     if (availableNames.length === 0) {
-        recentlyUsed.clear()
         availableNames = allAvailable
-        logger?.info('[猜角色] 像素猜角色冷却已清空，所有角色重新可用')
+        logger?.info('[猜角色] 像素猜角色候选均在冷却中，本次从全部候选中选择')
     }
 
     if (availableNames.length === 0) {
@@ -98,15 +107,17 @@ export async function startPixelGame(e) {
     }
 
     const name = randomItem(availableNames)
-    recentlyUsed.set(name, now)
+    return withRoleReservation(name, commitRole => startPixelGameForRole(e, groupId, name, commitRole))
+}
 
+async function startPixelGameForRole(e, groupId, name, commitRole) {
     const extra = getExtraData(name)
     if (!extra) {
         await e.reply(`角色 ${name} 的 data.json 不存在，无法开始游戏`)
         return false
     }
 
-    const imgPath = getImagePath(mode, name)
+    const imgPath = getImagePath('splash', name)
     if (!imgPath) {
         await e.reply(`未找到 ${name} 的立绘图片`)
         return false
@@ -138,15 +149,16 @@ export async function startPixelGame(e) {
     games.set(groupId, game)
 
     try {
-        await e.reply([
+        await replyOrThrow(e, [
             segment.image(pixelBuffer),
             `\n🧱 ${initialGrid}x${initialGrid} 像素化立绘，猜猜这是谁？\n发送 #提示 提升分辨率，直接发送角色名作答`
         ])
+        commitRole()
         logger?.info(`[像素猜角色] 群${groupId} 开始游戏，角色: ${name}，初始分辨率: ${initialGrid}x${initialGrid}`)
     } catch (err) {
         logger?.error('[像素猜角色] 发送图片失败', err)
-        await e.reply(`发送图片失败：${err.message}`)
         games.delete(groupId)
+        await e.reply(`发送图片失败：${err.message}`)
         return false
     }
     return true
@@ -158,7 +170,7 @@ export async function startPixelGame(e) {
  * @param {string} groupId - 群号
  * @returns {{buffer: Buffer|null, message: string}}
  */
-export async function handlePixelHint(game, groupId) {
+export async function handlePixelHint(game) {
     // 已到达最高清晰度
     if (game.currentGridIndex >= GRID_STAGES.length - 1) {
         return {
@@ -167,20 +179,18 @@ export async function handlePixelHint(game, groupId) {
         }
     }
 
-    // 提升一级
-    game.currentGridIndex++
-    const newGrid = GRID_STAGES[game.currentGridIndex]
+    const nextGridIndex = game.currentGridIndex + 1
+    const newGrid = GRID_STAGES[nextGridIndex]
 
     try {
         const buffer = await generatePixelImage(game.imgPath, newGrid, OUTPUT_SIZE, BG_COLOR)
         return {
             buffer,
-            message: `🧱 分辨率已提升至 ${newGrid}x${newGrid}（第 ${game.currentGridIndex + 1}/${GRID_STAGES.length} 级）`
+            nextGridIndex,
+            message: `🧱 分辨率已提升至 ${newGrid}x${newGrid}（第 ${nextGridIndex + 1}/${GRID_STAGES.length} 级）`
         }
     } catch (err) {
         logger?.error('[像素猜角色] 生成提示图失败', err)
-        // 回退索引，避免影响后续提示
-        game.currentGridIndex--
         return {
             buffer: null,
             message: `生成提示图失败：${err.message}`

@@ -1,30 +1,12 @@
-import fs from 'node:fs'
-import {
-  pluginName,
-  pluginApplications
-} from "./config/constant.js"
+// ============================================================
+// 插件入口
+// 只导出 Guess 主插件类，避免把 apps 中的工具函数误当成插件实例化。
+// ============================================================
 
-const files = fs.readdirSync(pluginApplications).filter(file => file.endsWith('.js'))
+import Guess from './apps/guess.js'
 
-let ret = []
+const apps = { guess: Guess }
 
-files.forEach((file) => {
-  ret.push(import(`./apps/${file}`))
-})
-
-ret = await Promise.allSettled(ret)
-
-let apps = {}
-for (let i in files) {
-  let name = files[i].replace('.js', '')
-
-  if (ret[i].status !== 'fulfilled') {
-    logger.error(`载入插件错误：${logger.red(name)}`)
-    logger.error(ret[i].reason)
-    continue
-  }
-  apps[name] = ret[i].value[Object.keys(ret[i].value)[0]]
-}
 logger.info('------(ˊ·ω·ˋ)------');
 logger.info('guess-plugin载入成功!');
 logger.info('仓库地址 https://github.com/Small-JiaJia/guess-plugin.git');

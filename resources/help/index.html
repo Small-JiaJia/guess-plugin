@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{title}}</title>
+    <link rel="stylesheet" href="{{pluginResourcesUrl}}help/index.css">
+</head>
+<body>
+    <div id="container">
+        <header class="info-box">
+            <div class="header-main">
+                <div class="wish-emblem" aria-hidden="true"><span></span></div>
+                <div class="head-box">
+                    <div class="eyebrow">提瓦特 · 冒险指南</div>
+                    <h1 class="title">{{title}}</h1>
+                    <div class="label">TRAVELER'S HANDBOOK</div>
+                </div>
+            </div>
+            <div class="header-bottom">
+                <div class="elements" aria-label="风、岩、雷、草、水、火、冰七元素">
+                    <span class="element anemo">风</span><span class="element geo">岩</span><span class="element electro">雷</span><span class="element dendro">草</span><span class="element hydro">水</span><span class="element pyro">火</span><span class="element cryo">冰</span>
+                </div>
+                <div class="shortcut"><span>#帮助</span><i>/</i><span>#猜角色帮助</span></div>
+            </div>
+        </header>
+
+        <section class="cont-box answer-box">
+            <div class="help-group"><span class="section-star" aria-hidden="true">✦</span>如何作答<small>向着星辰与深渊</small></div>
+            <div class="answer-copy">{{answerTip}}</div>
+        </section>
+
+        {{each groups group}}
+        <section class="cont-box">
+            <div class="help-group"><span class="group-number">{{group.number}}</span>{{group.title}}<small>{{group.subtitle}}</small></div>
+            <div class="help-table">
+                {{each group.rows row}}
+                <div class="tr">
+                    {{each row item}}
+                    <div class="td">
+                        {{if item}}
+                        <div class="command-info">
+                            <strong class="help-title">{{item.command}}</strong>
+                            <span class="help-desc">{{item.description}}</span>
+                        </div>
+                        {{/if}}
+                    </div>
+                    {{/each}}
+                </div>
+                {{/each}}
+            </div>
+        </section>
+        {{/each}}
+
+        <div class="notes-grid">
+            {{each notes note}}
+            <section class="cont-box note-box">
+                <div class="help-group"><span class="section-star" aria-hidden="true">✦</span>{{note.title}}</div>
+                <ul class="help-desc note-list">{{each note.items item}}<li>{{item}}</li>{{/each}}</ul>
+            </section>
+            {{/each}}
+        </div>
+
+        <footer><span class="footer-star" aria-hidden="true">✦</span> GUESS PLUGIN <i>·</i> 旅行者专属指令手册 <span class="footer-star" aria-hidden="true">✦</span></footer>
+    </div>
+</body>
+</html>
