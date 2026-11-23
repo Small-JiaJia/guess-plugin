@@ -9,7 +9,8 @@ import {
     games, recentlyUsed,
     loadRoleData,
     randomItem,
-    cleanTimeout, COOLDOWN_MS,
+    withGameStartLock, withRoleReservation, isRoleReserved,
+    replyOrThrow, COOLDOWN_MS,
     getExtraData, readDataJson, getBirthdayMessage
 } from './core.js'
 import {
@@ -23,18 +24,18 @@ import {
 const SPECIAL_CHARACTERS = ['派蒙']
 
 export async function startBirthday(e) {
+    const groupId = e.group_id
+    if (!groupId) return false
+    return withGameStartLock(groupId,
+        () => e.reply('当前群已有游戏，请先结束或等待超时'),
+        () => startBirthdayReserved(e, groupId)
+    )
+}
+
+async function startBirthdayReserved(e, groupId) {
     const { roleNames: loadedNames } = await loadRoleData()
     if (!loadedNames || loadedNames.length === 0) {
         await e.reply('角色数据加载失败，请检查')
-        return false
-    }
-
-    const groupId = e.group_id
-    if (!groupId) return false
-
-    cleanTimeout(groupId)
-    if (games.has(groupId)) {
-        await e.reply('当前群已有游戏，请先结束或等待超时')
         return false
     }
 
@@ -56,21 +57,28 @@ export async function startBirthday(e) {
         return false
     }
 
+    const unreserved = allAvailable.filter(name => !isRoleReserved(name))
+    if (unreserved.length === 0) {
+        await e.reply('所有可用角色正在生成游戏，请稍后重试')
+        return false
+    }
+
     // 冷却过滤
     const now = Date.now()
-    let availableNames = allAvailable.filter(name => {
+    let availableNames = unreserved.filter(name => {
         const lastUsed = recentlyUsed.get(name) || 0
         return now - lastUsed >= COOLDOWN_MS
     })
     if (availableNames.length === 0) {
-        recentlyUsed.clear()
-        availableNames = allAvailable
-        logger?.info('[猜生日贺图] 冷却已清空，所有角色重新可用')
+        availableNames = unreserved
+        logger?.info('[猜生日贺图] 候选角色均在冷却中，本次从全部候选中选择')
     }
 
     const name = randomItem(availableNames)
-    recentlyUsed.set(name, now)
+    return withRoleReservation(name, commitRole => startBirthdayForRole(e, groupId, name, commitRole))
+}
 
+async function startBirthdayForRole(e, groupId, name, commitRole) {
     // ★ extra 允许为空（针对派蒙这类特殊角色）
     let extra = getExtraData(name)
     if (!extra) {
@@ -117,10 +125,13 @@ export async function startBirthday(e) {
 
     try {
         const buffer = await generateCrop(game)
-        await e.reply([segment.image(buffer), '\n发送 #提示 刷新视角'])
+        game.startedAt = Date.now()
         games.set(groupId, game)
+        await replyOrThrow(e, [segment.image(buffer), '\n发送 #提示 刷新视角'])
+        commitRole()
         logger?.info(`[猜生日贺图] 群${groupId} 开始游戏，角色: ${name}, 年份: ${year}`)
     } catch (err) {
+        if (games.get(groupId) === game) games.delete(groupId)
         logger?.error('[猜生日贺图] 生成图片失败', err)
         await e.reply(`生成图片失败：${err.message}`)
         return false
